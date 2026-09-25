@@ -188,12 +188,12 @@ export interface UserLpmConfig { version: 1; scanDirs: string[] }   // 绝对路
 
 以下所有 stub 的函数体统一为 `throw new Error('not implemented: <函数名>（计划 S<x>）')`——本节交付的是类型、签名与行为契约；领域错误类型（如 WorkspaceNotFound）由各实现 spec 自行引入，S1 不预建错误体系。
 
-**core/pm.ts**（S3 填充）：
+**core/pm.ts**（S3 已填充；新增导出 detectPackageManagerDetailed / resolvePackageManager / subdivideYarn / PMAmbiguousError / PMUnresolvedError 与类型 PMEvidence / DetectResult / PMResolution，见 S3 spec §4.3）：
 
 ```ts
 export type PackageManagerId = 'pnpm' | 'npm' | 'yarn-classic' | 'yarn-berry'
 // 推断优先级（lockfile > packageManager 字段 > workspace 清单）与 berry/classic 判定见 PRD §7，S3 实现
-export async function detectPackageManager(rootDir: string): Promise<PackageManagerId>  // stub
+export async function detectPackageManager(rootDir: string): Promise<PackageManagerId>  // S3 已实现（detectPackageManagerDetailed 的单行包装）
 ```
 
 **core/workspace.ts**（S2 填充）：
@@ -260,12 +260,12 @@ export function restoreDepValue(manifestSource: string, pkgName: string, origina
 
 > S2 落地回写（S1 §4.6 演进约定）：`core/globmatch.ts` 新增导出 `matchWorkspacePattern`；`core/workspace.ts` 新增导出 3 个错误类 `WorkspaceNotFoundError` / `ManifestParseError` / `WorkspacePatternError`。冻结签名与数据契约未改动。
 
-### 4.4 state 读写 API（S4 填充）—— src/state/index.ts
+### 4.4 state 读写 API（S4 填充；readProjectConfig/writeProjectConfig 已由 S3 提前实现，含原子写 helper src/state/atomic.ts 与 LpmConfigParseError）—— src/state/index.ts
 
 ```ts
 // 全部写入为原子写：临时文件 + rename（PRD §9 崩溃安全，防双终端并发写坏）
-export async function readProjectConfig(rootDir: string): Promise<ProjectLpmConfig | null>   // null = 未初始化
-export async function writeProjectConfig(rootDir: string, cfg: ProjectLpmConfig): Promise<void>
+export async function readProjectConfig(rootDir: string): Promise<ProjectLpmConfig | null>   // null = 未初始化；S3 提前实现
+export async function writeProjectConfig(rootDir: string, cfg: ProjectLpmConfig): Promise<void>   // S3 提前实现（原子写）
 export async function readState(rootDir: string): Promise<LinkState | null>
 export async function writeState(rootDir: string, st: LinkState): Promise<void>
 export async function deleteState(rootDir: string): Promise<void>   // links 清空即删文件（兼作 web 片段开关信号）
@@ -333,6 +333,8 @@ export function notImplemented(meta: CommandMeta): void {
 | `lpm`（无参数）/ `lpm --help` | help：命令名 + summary + 计划 spec 注记 | — | 0 |
 | `lpm <已注册命令> ...` | — | `lpm <命令> 尚未实现（计划 <spec>）。当前可用：lpm --help` | 0（stub 契约，见 §6） |
 | `lpm <未知命令>` | — | commander 默认错误（内建相似命令提示保留，打磨在 S12） | 1（commander 默认） |
+
+> 注（S3 回写）：`lpm use` 已实现为真实命令（行为契约见 S3 spec §4.5），上表"已注册命令 → stub"行对 use 不再适用；其余命令仍走 stub 契约。
 
 选项注册：S1 仅 commander 内建 `--version` / `--help`；各命令参数与选项（`--watch` / `--all` / `--last` / `preset rm` 子命令等）随各自 spec 注册。
 

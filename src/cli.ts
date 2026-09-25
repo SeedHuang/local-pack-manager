@@ -1,8 +1,9 @@
-import { Command } from 'commander'
+import { Command, Argument } from 'commander'
 import { realpathSync } from 'node:fs'
 import { pathToFileURL } from 'node:url'
 import { COMMANDS } from './commands/registry.js'
 import { notImplemented } from './commands/stub.js'
+import { runUse } from './commands/use.js'
 import { LPM_VERSION } from './version.js'
 
 export function buildProgram(): Command {
@@ -10,6 +11,17 @@ export function buildProgram(): Command {
   program.name('lpm').description('npm 本地 link 联调 CLI').version(LPM_VERSION)
 
   for (const meta of COMMANDS) {
+    // S3：use 为首个真实命令，特判接线（description 不带计划后缀）；其余命令维持 stub 循环（S1 §4.5）
+    if (meta.name === 'use') {
+      program
+        .command(meta.name)
+        .description(meta.summary)
+        .addArgument(new Argument('[pm]', 'pnpm | npm | yarn').choices(['pnpm', 'npm', 'yarn']))
+        .action(async (pm: 'pnpm' | 'npm' | 'yarn' | undefined) => {
+          process.exitCode = await runUse(pm)
+        })
+      continue
+    }
     program
       .command(meta.name)
       .description(`${meta.summary}（计划 ${meta.plannedSpec}）`)
