@@ -1,0 +1,1 @@
+{ "name": "monorepo-npm-object", "workspaces": { "packages": ["apps/*"], "nohoist": ["**/y"] } }

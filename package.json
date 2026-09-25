@@ -1,0 +1,30 @@
+{
+  "name": "lpm",
+  "version": "0.1.0",
+  "type": "module",
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "bin": {
+    "lpm": "dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run tests/unit",
+    "test:e2e": "vitest run tests/e2e",
+    "verify": "pnpm typecheck && pnpm build && pnpm test && pnpm test:e2e"
+  },
+  "dependencies": {
+    "@clack/prompts": "^1.8.1",
+    "commander": "^15.0.0",
+    "execa": "^10.0.1"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.2",
+    "tsup": "^8.5.1",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.1"
+  }
+}

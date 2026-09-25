@@ -1,0 +1,11 @@
+# 块列表 + 引号 + 排除 + 行内注释 + catalog 同存
+packages:
+  - 'packages/*'
+  - 'apps/**'
+  - docs # 文档站
+  - !packages/legacy
+  - node_modules/**
+  - .hidden/**
+
+catalog:
+  react: ^18.0.0

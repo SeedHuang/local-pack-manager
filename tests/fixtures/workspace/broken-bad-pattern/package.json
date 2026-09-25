@@ -1,0 +1,1 @@
+{ "name": "bad-pattern", "workspaces": ["packages/*", "pkg-{a,b}"] }

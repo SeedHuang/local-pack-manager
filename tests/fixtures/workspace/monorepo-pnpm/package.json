@@ -1,0 +1,5 @@
+{
+  "name": "monorepo-pnpm",
+  "workspaces": ["packages/*"],
+  "dependencies": { "@fixture/shared": "^0.1.0" }
+}

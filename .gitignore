@@ -1,0 +1,4 @@
+**/node_modules/**
+!tests/fixtures/workspace/monorepo-pnpm/node_modules/**
+dist/
+.superpowers/

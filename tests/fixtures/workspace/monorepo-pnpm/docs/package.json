@@ -1,0 +1,4 @@
+{
+  "name": "@fixture/docs",
+  "optionalDependencies": { "@fixture/shared": "^0.3.0" }
+}
