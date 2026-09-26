@@ -232,7 +232,7 @@ export interface DepHit {
 export async function findDependents(ws: Workspace, pkgName: string): Promise<DepHit[]>   // stub
 ```
 
-**core/rewriter.ts**（S5 填充）：
+**core/rewriter.ts**（已由 S5 实现；新增导出 findDepEntries / ProtocolPathError 见 S5 spec §4.3）：
 
 ```ts
 import type { PackageManagerId } from './pm'
@@ -242,7 +242,7 @@ export type Protocol = 'link' | 'portal' | 'file'
 /** PRD §5 协议映射：pnpm | yarn-classic → link:，yarn-berry → portal:，npm → file:；
  *  返回完整依赖值（协议前缀 + 相对路径），相对路径基于 manifest 所在目录换算，
  *  正斜杠，永不输出绝对路径 */
-export function mapProtocol(pm: PackageManagerId, libDirAbs: string, manifestDirAbs: string): string   // stub
+export function mapProtocol(pm: PackageManagerId, libDirAbs: string, manifestDirAbs: string): string
 
 export interface RewriteResult {
   content: string          // 改写后全文
@@ -252,10 +252,10 @@ export interface RewriteResult {
 
 /** 文本级替换（PRD §9）：保持缩进 / key 顺序 / 尾随换行 / CRLF-LF / BOM；
  *  仅动命中行的 value；命中段：dependencies / devDependencies / optionalDependencies */
-export function rewriteDepValue(manifestSource: string, pkgName: string, targetValue: string): RewriteResult   // stub
+export function rewriteDepValue(manifestSource: string, pkgName: string, targetValue: string): RewriteResult
 
 /** unlink 恢复原 range，格式保持语义同上 */
-export function restoreDepValue(manifestSource: string, pkgName: string, originalRange: string): RewriteResult   // stub
+export function restoreDepValue(manifestSource: string, pkgName: string, originalRange: string): RewriteResult
 ```
 
 > S2 落地回写（S1 §4.6 演进约定）：`core/globmatch.ts` 新增导出 `matchWorkspacePattern`；`core/workspace.ts` 新增导出 3 个错误类 `WorkspaceNotFoundError` / `ManifestParseError` / `WorkspacePatternError`。冻结签名与数据契约未改动。
