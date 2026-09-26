@@ -1,0 +1,60 @@
+项目：d:\Seed\local-pack-manager —— lpm（Local Pack Manager）CLI：npm 本地 link 联调工具（本地 lib link/unlink 管理），TypeScript + commander，v1 PRD 驱动，按 S1–S13 spec 分期实施（docs/prds/2026-09-25-lpm-v1-prd.md §14）。
+
+现状：
+- 已提交（master，HEAD = 3adad48，upstream gone）：S1 脚手架 + S2 workspace 解析 = 1b46580；S3 PM 检测与 use 全量（含 OCR 修复轮 M1/M2/L1/L2，S3 最终全量评审 APPROVED）= 3adad48（2026-09-25）。
+- 上一份交接词（docs/handoffs/2026-09-25-s4-config-state.md）所列两项开放问题已在其后 session 闭环：
+  ① 双 BOM fixture 污染已消除：tests/fixtures/workspace/monorepo-bom/package.json 字节实测 EF BB BF 7B（单 BOM）与 HEAD 一致，git status 不再列出该文件；
+  ② B6 考古闭环：PRD 尾部新增「附录 A：评审修复编号对照表」（docs/prds/2026-09-25-lpm-v1-prd.md 行 460–484，+26 行），B6 = ".lpm/ 不在 .gitignore 会污染团队仓库，修复落点 §9 第 5 条"。
+- 提交状态：工作树仅两处未入库 —— M docs/prds/2026-09-25-lpm-v1-prd.md（附录 A）+ ?? docs/handoffs/2026-09-25-s4-config-state.md（上一份交接词）；其余与 HEAD 3adad48 一致。commit 由用户自行执行（用户 Git 规则）。
+- 绿色基线（2026-09-26 复跑 pnpm verify 四段全绿）：typecheck 0 + build 成功 + unit 91/91（12 文件：pm 26、config-io 8、use-command 14、其余 9 文件 43）+ e2e 11/11。config-io 8 与 use-command 14 已含 OCR 修复轮增补用例（14d、11b/13f）。
+- S4 未开工：docs/superpowers/{specs,plans} 仅 s1–s3；.superpowers/sdd 仅 s1/s2/s3 三本账。
+- .superpowers/ 已 gitignore（git status --porcelain -uall 仅上述两处），账本/报告不入库。
+
+过程记录（先读进度尾部）：
+- d:\Seed\local-pack-manager\.superpowers\sdd\2026-09-25-s3-pm-detection-use.md\progress.md（最新账本，行 18–39 = 四任务进度 + deferred minor 分诊 + OCR 修复轮裁决）
+- d:\Seed\local-pack-manager\.superpowers\sdd\2026-09-25-s2-workspace-discovery.md\progress.md（行 26 = BOM 写入方法 Ruling）
+- d:\Seed\local-pack-manager\.superpowers\sdd\2026-09-25-s1-cli-scaffold.md\progress.md（行 3–7 = 全局裁决源头）
+- 上一份交接词：d:\Seed\local-pack-manager\docs\handoffs\2026-09-25-s4-config-state.md（其开放问题已闭环；约束/留观项仍有效，本文为其继任）
+- spec/plan（已随 3adad48 提交）：docs\superpowers\specs\2026-09-25-s{1,2,3}-*-design.md、docs\superpowers\plans\2026-09-25-s{1,2,3}-*.md
+
+本次任务：S4「配置与状态文件层」（PRD docs/prds/2026-09-25-lpm-v1-prd.md §14 行 403：四文件读写、gitignore 检查；依赖 S1；承接 B6 = §9 第 5 条 gitignore 检查，编号定义见 PRD 附录 A）。
+前置环节（修 fixture 恢复基线、确认 B6）已闭环，从既定流程第 ③ 环节起：
+③ brainstorming 澄清（一次一问）→
+④ spec 落盘 docs/superpowers/specs/<落盘当日>-s4-<topic>-design.md → spec 自审 → 交用户评审（用户通过前不动代码）→
+⑤ writing-plans 出 plan（docs/superpowers/plans/<落盘当日>-s4-<topic>.md）→
+⑥ SDD 逐任务实施（preflight 扫描任务对共享点 → 逐 task 派发子代理，brief = 定向读 plan 对应 Task 节，每任务 reviewer 直读产出文件评审）→
+最终全量 review → pnpm verify 四段全量复跑。
+
+范围依据：
+- PRD docs/prds/2026-09-25-lpm-v1-prd.md §9「文件与数据」（行 295–313）：四文件 schema（lpm.config.json / .lpm/state.json / .lpm/last.json / ~/.lpm/config.json）、第 5 条 .gitignore 检查（行 304）、崩溃安全写入顺序（行 306）、重复 link 幂等规则（行 308）、非 lpm 链接检测（行 310）、文本级替换（行 312）；§11 错误处理政策（每条错误含下一步动作）。
+- S3 spec docs/superpowers/specs/2026-09-25-s3-pm-detection-use-design.md：§4.6（行 203–227）config 读写与原子写 helper 契约；§4.7（行 229–234）S4 剩余范围 = readState/writeState/deleteState/readLast/writeLast/readUserConfig/writeUserConfig/ensureGitignoreEntry（行 232）；config 深层 schema 校验归 S4（行 211）；LpmConfigParseError 与 state/atomic.ts 按 S3 spec 引用、不重复定义（行 234）。
+- 勿重做（S3 已实现并提交于 3adad48）：src/state/index.ts 的 readProjectConfig/writeProjectConfig/LpmConfigParseError（含 OCR 非对象最小判定）、src/state/atomic.ts（writeJsonFileAtomic 含 tmp 清理 + undefined 守卫）、src/core/pm.ts 全部导出、src/commands/use.ts 与 cli.ts use 接线。
+
+开放问题：无（上份交接词两问已闭环：fixture 已恢复字节级干净；B6 定义已落 PRD 附录 A。附录 A 为对话考古重建，若用户校对后有异议，以用户口径修订后再 commit）。
+
+既定约束（不要重新讨论、不要重新选型）：
+- 禁止一切 Git 写操作（worktree/分支/commit/push/restore 等），改动由用户自行 commit —— 用户全局 Git 规则（S1 账本行 4 起承袭）
+- 终端为 Windows PowerShell，skill 自带 bash 脚本不可用；review = reviewer 直读产出文件（S1 账本行 5）
+- 相对导入一律带 .js；目录模块写 <dir>/index.js（S1 账本行 7，全局生效）
+- 技术选型定版：TS ESM + Node ≥22.12 + commander + @clack/prompts + execa + tsup + vitest，运行时依赖零新增（PRD §14 行 391）；S2 依赖策略 A = 手写受限 glob + 极简 YAML
+- spec/plan 落盘路径惯例 docs/superpowers/{specs,plans}/YYYY-MM-DD-s<N>-*.md（S1–S3 既成事实；S4 日期取落盘当天）
+- 用户逐个评审 spec，通过前不动代码（PRD §14 行 395 工作流程）
+- 原子写 = 临时文件 + rename；writeProjectConfig 的 fs 失败保持 crash 语义、不入错误契约（S3 账本行 37 Ruling，S12 错误即建议全局化时统一收敛）
+- Task 工具无 model 参数，统一默认模型（S1 账本行 6）
+- 测试期子代理运行后必须核对 git status——fixture 曾被子代理重写引入双 BOM（先例见 S2 账本行 26 与上一份交接词）
+- BOM 敏感文件写入需遵循 S2 账本行 26 的 BOM 写入方法 Ruling（Write 工具剥 BOM、PowerShell 补 BOM 对已有 BOM 文件会二次补出双 BOM）
+
+遗留裁决与留观项（来源 S3 账本行 22–39 分诊）：
+- T1①：writeJsonFileAtomic tmp 名仅 pid 后缀，同进程并发写同目标理论互撞 → S4 复用 atomic 时决策（修或不修均留痕）
+- T1②：readProjectConfig async 函数内同步 fs → 冻结签名所致，演进走 S1 spec §4.6
+- T2①：pm 级间穿透组合用例（bun 字段 + pnpm-workspace.yaml → pnpm）→ S4 深化时补
+- OCR L3（BOM 剥除三处重复）/ L4（PM token 三处声明）：留观（L3 动 S2 冻结文件；L4 v1 不加新 PM）
+- 最终评审 M1/M2：pm.test 防御分支子态（读取失败/切分失败）留观
+- 文案/断言增强类（T3③ 依据前缀 → S12；T4① e2e 22 stderr 增强 → S9+）：不在 S4 范围，勿顺手做
+
+开工前先做：
+1. git status 确认 HEAD = 3adad48、工作树仅 PRD 附录 A（M）与 docs/handoffs/（??）两处；跑 pnpm verify 复核基线 unit 91/91 + e2e 11/11
+2. 读 d:\Seed\local-pack-manager\.superpowers\sdd\2026-09-25-s3-pm-detection-use.md\progress.md 全文（重点行 22–39 分诊与 OCR 裁决）
+3. 读 PRD docs/prds/2026-09-25-lpm-v1-prd.md §9（行 295–313）+ §14 行 403 + 附录 A（行 460–484，B6 定义）；读 S3 spec §4.6/§4.7（docs/superpowers/specs/2026-09-25-s3-pm-detection-use-design.md 行 203–234）
+4. 读 src/state/index.ts 与 src/state/atomic.ts 现行实现，盘点 S4 可直接复用的面
+5. 进入 brainstorming 一次一问澄清 S4 范围；§9 第 5 条原文仅"首次创建 .lpm/ 时检查并提示追加"一句，ensureGitignoreEntry 的判定/提示/交互细节是第一个待澄清点；state.json 的 links 嵌套 schema 与 last.json 语义也需在 spec 期定稿

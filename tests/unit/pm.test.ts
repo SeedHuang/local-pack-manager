@@ -135,6 +135,15 @@ describe('detectPackageManagerDetailed：清单级与无证据（§4.4 级 3/4�
     expect(r.evidence).toEqual({ kind: 'workspace-manifest', file: 'pnpm-workspace.yaml' })
   })
 
+  it('级间穿透：packageManager 字段含未知 PM（bun@1）+ pnpm-workspace.yaml（无 lockfile）→ pnpm（T2①，evidence workspace-manifest）', async () => {
+    const dir = makeProject()   // 用该文件既有临时目录 helper；若无则以现有用例同款方式自建
+    writeFileSync(join(dir, 'package.json'), JSON.stringify({ name: 'x', packageManager: 'bun@1.0.0' }), 'utf8')
+    writeFileSync(join(dir, 'pnpm-workspace.yaml'), 'packages:\n  - "apps/*"\n', 'utf8')
+    const r = await detectPackageManagerDetailed(dir)
+    expect(r.pm).toBe('pnpm')
+    expect(r.evidence).toEqual({ kind: 'workspace-manifest', file: 'pnpm-workspace.yaml' })
+  })
+
   it('用例 6：仅 package.json workspaces 字段 → PMUnresolvedError（npm/yarn 同形不可辨）', async () => {
     const dir = makeProject({ 'package.json': JSON.stringify({ workspaces: ['apps/*'] }) })
     const err = await detectPackageManagerDetailed(dir).catch((e: unknown) => e)

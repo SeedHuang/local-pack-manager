@@ -208,7 +208,8 @@ readProjectConfig(rootDir):
   存在 → 读 + 剥行首 UTF-8 BOM（规约同 S2 §4.2）+ JSON.parse
     JSON 坏 → LpmConfigParseError（message 含路径 + 下一步动作，§6.5）
     非对象（数组/原始值/null）→ LpmConfigParseError「应为 JSON 对象」（OCR 修复轮 2026-09-25 增补：
-      非对象配置会让下游属性赋值/序列化静默失败；最小类型判定，非深层 schema 校验——S4 深化）
+      非对象配置会让下游属性赋值/序列化静默失败；深层最小校验（libs 对象 / version）已由 S4 补——
+      S4 spec §4.4 规约 5–7，非对象文案统一为「lpm 状态/配置文件」措辞）
     成功 → 返回 as ProjectLpmConfig
 
 writeProjectConfig(rootDir, cfg):
@@ -219,7 +220,8 @@ writeProjectConfig(rootDir, cfg):
 原子写 helper 契约（`writeJsonFileAtomic`）：
 
 ```
-1. tmp = <filePath>.<pid>.tmp（同目录保证 rename 同盘；pid 后缀防双终端并发互踩——PRD §9 动机）
+1. tmp = <filePath>.<pid>.<uuid>.tmp（同目录保证 rename 同盘；pid 防双终端并发互踩 + uuid 防同进程并发互撞
+   ——PRD §9 动机 + S4 T1① 强化，uuid 实际覆盖 worker_threads 共享 pid 场景）
 2. 完整内容写入 tmp
 3. renameSync(tmp, filePath)   # Node 在 Windows 对已存在目标可覆盖（MoveFileEx REPLACE_EXISTING 语义）
 失败语义（OCR 修复轮 2026-09-25 增补）：value 序列化为 undefined（如传入 undefined）→ TypeError 不落盘；
@@ -252,7 +254,7 @@ S6 消费：readProjectConfig(rootDir).packageManager → resolvePackageManager(
 | 2 | 无任何证据 | `PMUnresolvedError` → stderr，退出 1 | 「无法推断包管理器（未发现 lockfile、packageManager 字段或 pnpm-workspace.yaml）。请手动指定：lpm use <pnpm\|npm\|yarn>」 |
 | 3 | 显式 use 与 lockfile 冲突（TTY，拒绝/取消） | 警告 + confirm；取消 → stdout「已取消，未变更」，退出 0 | 「…与现有 lockfile 冲突…仍要使用 <pm>？」 |
 | 4 | 同上（非 TTY） | 报错退出 1 | 「与现有 lockfile 冲突，且当前环境无法交互确认。请改在终端运行，或先移除冲突 lockfile」 |
-| 5 | config 坏 JSON / 非对象 | `LpmConfigParseError` → stderr，退出 1 | 「<路径> 不是合法 JSON（<原因>）」/「<路径> 不是合法的 lpm 配置（应为 JSON 对象）」，均含「可修复或直接删除该文件——lpm 状态可抛弃重建」 |
+| 5 | config 坏 JSON / 非对象 | `LpmConfigParseError` → stderr，退出 1 | 「<路径> 不是合法 JSON（<原因>）」/「<路径> 不是合法的 lpm 状态/配置文件（应为 JSON 对象）」（S4 统一措辞），均含「可修复或直接删除该文件——lpm 状态可抛弃重建」 |
 | 6 | 幂等设定 | 「包管理器已设定为 <id>」，退出 0，无写入 | — |
 | 7 | corepack 字段含未知 PM 名（bun 等）/解析失败 | 跳过该信号继续后续级（非错误） | — |
 | 8 | yarn.lock 读失败且无 .yarnrc.yml | 按 yarn-classic（PRD"否则 classic"字面） | — |

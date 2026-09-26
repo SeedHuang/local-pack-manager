@@ -260,7 +260,7 @@ export function restoreDepValue(manifestSource: string, pkgName: string, origina
 
 > S2 落地回写（S1 §4.6 演进约定）：`core/globmatch.ts` 新增导出 `matchWorkspacePattern`；`core/workspace.ts` 新增导出 3 个错误类 `WorkspaceNotFoundError` / `ManifestParseError` / `WorkspacePatternError`。冻结签名与数据契约未改动。
 
-### 4.4 state 读写 API（S4 填充；readProjectConfig/writeProjectConfig 已由 S3 提前实现，含原子写 helper src/state/atomic.ts 与 LpmConfigParseError）—— src/state/index.ts
+### 4.4 state 读写 API（已由 S4 全部实现；readProjectConfig/writeProjectConfig 由 S3 提前、S4 增强深层校验，含原子写 helper src/state/atomic.ts 与 LpmConfigParseError/LpmStateParseError）—— src/state/index.ts
 
 ```ts
 // 全部写入为原子写：临时文件 + rename（PRD §9 崩溃安全，防双终端并发写坏）
@@ -274,8 +274,8 @@ export async function writeLast(rootDir: string, last: LastSet): Promise<void>
 export async function readUserConfig(): Promise<UserLpmConfig>      // 文件缺失 → { version: 1, scanDirs: [] }
 export async function writeUserConfig(cfg: UserLpmConfig): Promise<void>
 
-/** 首次创建 .lpm/ 时检查 .gitignore 是否覆盖 .lpm/，未覆盖则追加并告知（PRD §9.5） */
-export async function ensureGitignoreEntry(rootDir: string): Promise<'present' | 'added'>   // stub
+/** 首次创建 .lpm/ 时检查 .gitignore 是否覆盖 .lpm/，未覆盖则追加并告知（PRD §9.5）——S4 实现（writeState 内建调用，归一化口径见 S4 spec §4.4） */
+export async function ensureGitignoreEntry(rootDir: string): Promise<'present' | 'added'>
 ```
 
 ### 4.5 命令层（S1 交付主体）
@@ -374,7 +374,7 @@ S1 无业务数据流，三条骨架数据流：
 | registry.test.ts | 命令全集覆盖 | `COMMANDS` 名称集合 === PRD §7 全集 11 个（use/link/unlink/status/repair/save/preset/forget/dir/init/uninit），无重复；每项含 summary 与 plannedSpec |
 | program.test.ts | program 组装 | `buildProgram()` 注册的命令名单与 COMMANDS 一致；含 `--version` 选项 |
 | stub.test.ts | stub 行为 | 任取 2 个命令 handler 执行：handler 不设非零退出码（`process.exitCode ?? 0 === 0`），stderr 含"尚未实现"与 plannedSpec |
-| state-stub.test.ts | stub 可 rejected | 抽样 readState / readProjectConfig：reject 且 message 符合 not-implemented 约定 |
+| state-stub.test.ts | stub 可 rejected | 抽样 readState / readProjectConfig：reject 且 message 符合 not-implemented 约定（S4 退役：8 函数全部实现，文件已删除） |
 
 ### 7.3 e2e 清单（spawn `node dist/cli.js`，工作目录用临时目录）
 
