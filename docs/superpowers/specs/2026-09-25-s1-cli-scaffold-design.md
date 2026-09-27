@@ -348,7 +348,7 @@ export function notImplemented(meta: CommandMeta): void {
 S1 无业务数据流，三条骨架数据流：
 
 1. **版本同源流**：`package.json.version` →（build）tsup `define` 注入 → `dist/cli.js --version` 输出；同源 →（test）vitest `define` 注入 → unit/e2e 断言与 package.json 一致。单一事实源，双构建路径不可能漂移
-2. **命令调用流**：argv → `run()` → commander parse → registry 命中 → handler（use / link 已实现——S3/S6 特判接线，真实退出码；其余 stub：stderr 中文提示，退出码保持 0）；未命中 → commander 默认错误；`--version` / `--help` / 无参数 → help 输出
+2. **命令调用流**：argv → `run()` → commander parse → registry 命中 → handler（use / link / unlink 已实现——S3/S6/S7 特判接线，真实退出码；其余 stub：stderr 中文提示，退出码保持 0）；未命中 → commander 默认错误；`--version` / `--help` / 无参数 → help 输出
 3. **业务管线（预告，仅接口）**：cwd → findWorkspaceRoot → loadWorkspace → findDependents → rewriter → state → PM install——每段独立文件、签名冻结（§4.3–4.4），S1–S6 已全部填充（S6 完成链路编排）
 
 ## 6. 错误处理
@@ -403,7 +403,7 @@ S1 无业务数据流，三条骨架数据流：
 | core/pm.ts | S3 PM 检测与 use |
 | state/* | S4 配置与状态文件层 |
 | core/rewriter.ts | S5 改写引擎 |
-| commands/* | use（S3）/ link（S6）已实现；其余 stub 随 S7+ 逐期；交互 S9；打磨 S12 |
+| commands/* | use（S3）/ link（S6）/ unlink（S7）已实现；其余 stub 随 S7+ 逐期；交互 S9；打磨 S12 |
 
 本 spec 评审通过后：invoke **writing-plans** 出 S1 implementation plan → executing-plans + TDD 实施（逐 spec 循环，用户已定）。
 

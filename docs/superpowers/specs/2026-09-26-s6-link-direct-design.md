@@ -151,6 +151,7 @@ export class InstallError extends Error {
 }
 /** 单次 install（workspace 根执行，stdio 继承透传输出——禁止死屏）；失败抛 InstallError */
 export async function runInstall(rootDir: string, pm: PackageManagerId): Promise<void>
+// 注记（S7 回写，S7 spec §4.3）：S7 起增加可选第三参 retryAdvice（缺省 = link 向文案，既有调用零改动）
 
 /** lib 自身 PM 探测（§2 裁决 2）：lib 目录 lockfile——pnpm-lock→pnpm；yarn.lock→subdivideYarn；
  *  package-lock→npm；无证据 → 'npm'（回退）；多 lockfile 共存按 pnpm-lock > yarn.lock > package-lock
@@ -230,6 +231,7 @@ export async function runLink(targets: readonly string[], opts: LinkOptions, cwd
 2. package.json 不存在 → `manifest-missing`（「不是 npm 包——请确认路径指向包目录」）
 3. JSON.parse（剥 BOM）失败 → `manifest-invalid`（文案含解析错误位置）
 4. **name 一致性（B7）**：`expectedName` 非空且 lib name ≠ expectedName → `name-mismatch`（文案：「lib 实际 name（<name>）≠ 通讯录 key（<key>）。请更新 lpm.config.json 中 libs 键为 <name> 后重试」——PRD §11 行 357 字面：报错 + 下一步建议，不自动改注册）
+   - 空名豁免（N-4）：lib name 为空串时跳过 name-mismatch 检查（空名 lib 无法被依赖引用，D1/D7 自洽豁免）
 5. **入口产物（B5）**：按 `exports` → `main` 顺序解析入口——exports 存在：收集 '.' 主入口的全部字符串路径候选（直接字符串，或 import / require / node / default 子键中的字符串值）；无 exports → 取 `main`；候选含目录结尾（无扩展名）时试 `index.js`。**全部候选文件均不存在** → `entry-missing`（文案「先 build 或起 build:watch」）；**无法取得任何候选**（无 exports 无 main，或仅 types）→ 跳过检查（CSS/类型包等无入口约定合法——B5「无构建 lib 误报」的豁免面）
 6. **node_modules 空检查**：`libDir/node_modules` 不存在或存在但 readdir 为空 → `node-modules-empty`（文案「先在 <lib路径> 执行包管理器 install」——PRD §11 行 355）
 7. `expectWatchScript` 且 `scripts['build:watch']` 缺失或非 string → `watch-script-missing`（文案「<lib> 缺 build:watch script；请在 lib package.json 补充后重试，或去掉 --watch」）
@@ -433,7 +435,7 @@ argv → cli.ts（link 特判）→ runLink(targets, opts, cwd)
 1. `pnpm verify` 全绿（typecheck 0 + build + unit 含新增 + e2e 含新增），本机 Windows 通过；计数链定版 unit **223** = 158 基线 + T1 7 + T2 17 + T3 8 + T4 33（T2 +1 / T3 +1 / T4 +3 为 OCR 修复轮及残余修复新增，含残余① T4-33）+ e2e **16**（11 + 5）——计划期修订 5（T3 评审 I-1 修订 +1）与计划期修订 11（OCR 修复轮 + 残余①②）
 2. §4.4 契约 ↔ 用例双向映射齐全（每条至少一正一反）
 3. §6 错误表 17 条逐条有触发测试（断言错误类型/退出码/文案关键片段；#3 #4 #15 经透传路径覆盖）
-4. 冻结面核验：S5 rewriter 恰 7 导出、S2 workspace 既有导出、S3 pm 既有导出、S4 state 既有导出逐字零改动；新增导出仅 §4.3 所列（writeTextFileAtomic / listWorkspaceMembers / linkcheck 三件 / install 四件 / runLink+LinkOptions+LinkArgumentError+LinkInteractionError）
+4. 冻结面核验：S5 rewriter 恰 7 导出、S2 workspace 既有导出、S3 pm 既有导出、S4 state 既有导出逐字零改动；新增导出仅 §4.3 所列（writeTextFileAtomic / listWorkspaceMembers / linkcheck 三件 / install 四件 / runLink+LinkOptions+LinkArgumentError+LinkInteractionError+LinkTargetError）
 5. 依赖白名单不变：运行时依赖恰为 commander / @clack/prompts / execa（零新增；git 为 system 命令调用，非依赖）
 6. S1 spec 回写完成（§4.5 义务，hunk 清单 plan 期定）
 7. **dry-run 一致性校验（PRD §13.9）**：同一 fixture 下 dry-run 计划中的改写明细/upsert 清单 == 真实执行后的实际文件变化集合（自动化断言，unit 编排层实现——install mock 后真实写盘）

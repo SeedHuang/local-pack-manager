@@ -207,3 +207,68 @@ describe('lpm link e2e（S6 spec §7.3）', () => {
     expect(r.stdout).not.toContain('把依赖切到本地目录联调（计划 S6）')
   })
 })
+
+describe('lpm unlink e2e（S7 spec §7.3）', () => {
+  const made: string[] = []
+  function makeProject(files: Record<string, string> = {}): string {
+    const dir = mkdtempSync(join(tmpdir(), 'lpm-unlink-e2e-'))
+    made.push(dir)
+    for (const [name, content] of Object.entries(files)) {
+      const p = join(dir, name)
+      mkdirSync(join(p, '..'), { recursive: true })
+      writeFileSync(p, content, 'utf8')
+    }
+    return dir
+  }
+  afterEach(() => {
+    while (made.length > 0) rmSync(made.pop() as string, { recursive: true, force: true })
+  })
+
+  const WS_FILES = {
+    'package.json': JSON.stringify({ name: 'ws-root', private: true }),
+    'pnpm-workspace.yaml': "packages:\n  - 'apps/web'\n",
+    'lpm.config.json': JSON.stringify({ version: 1, packageManager: 'pnpm', libs: { '@t/lib': 'lpm-lib/lib' } }),
+    'lpm-lib/package.json': JSON.stringify({ name: '@t/lib', main: './index.js' }),
+    'apps/web/package.json': JSON.stringify({ name: 'web', dependencies: { '@t/lib': 'link:../lpm-lib' } }),
+  }
+  const STATE_ONE = { version: 1, links: { '@t/lib': { original: { 'apps/web/package.json': '^1.0.0' }, linkedAt: '2026-01-01T00:00:00.000Z' } } }
+
+  it('E2E-6 dry-run：计划输出恢复明细 + install/复验行 + 项目 byte 级零变化', async () => {
+    const ws = makeProject({ ...WS_FILES, '.lpm/state.json': JSON.stringify(STATE_ONE) })
+    const before = readFileSync(join(ws, 'apps/web/package.json'), 'utf8')
+    const r = await runCli(['unlink', '--dry-run', '@t/lib'], ws)
+    expect(r.exitCode).toBe(0)
+    expect(r.stdout).toContain('dry-run 执行计划')
+    expect(r.stdout).toContain('恢复 apps/web/package.json')
+    expect(r.stdout).toContain('dependencies.@t/lib：link:../lpm-lib → ^1.0.0')
+    expect(r.stdout).toContain('install：pnpm install --no-frozen-lockfile')
+    expect(readFileSync(join(ws, 'apps/web/package.json'), 'utf8')).toBe(before)
+    expect(existsSync(join(ws, '.lpm', 'last.json'))).toBe(false)
+  })
+
+  it('E2E-7 未链接名字：跳过 exit 0（spawn 即非 TTY 不触发交互）', async () => {
+    const ws = makeProject(WS_FILES)
+    const r = await runCli(['unlink', 'ghost'], ws)
+    expect(r.exitCode).toBe(0)
+  })
+
+  it('E2E-8 --all 空 state：无已链接项 exit 0', async () => {
+    const ws = makeProject(WS_FILES)
+    const r = await runCli(['unlink', '--all'], ws)
+    expect(r.exitCode).toBe(0)
+  })
+
+  it('E2E-9 --all 与 targets 互斥：exit 1', async () => {
+    const ws = makeProject({ ...WS_FILES, '.lpm/state.json': JSON.stringify(STATE_ONE) })
+    const r = await runCli(['unlink', '--all', '@t/lib'], ws)
+    expect(r.exitCode).toBe(1)
+    expect(r.stderr).toContain('互斥')
+  })
+
+  it('E2E-10 --help unlink 行无「（计划 S7）」后缀', async () => {
+    const r = await runCli(['--help'], os.tmpdir())
+    expect(r.exitCode).toBe(0)
+    expect(r.stdout).toContain('恢复 registry 版本') // registry.ts unlink summary 实值
+    expect(r.stdout).not.toContain('恢复 registry 版本（计划 S7）')
+  })
+})

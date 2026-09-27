@@ -5,7 +5,7 @@ import { execa } from 'execa'
 import { LibCheckError, checkLib } from '../core/linkcheck.js'
 import { InstallError, buildInstallCommandLine, detectLibPM, pmExecutable, runInstall, spawnBuildWatch, type WatchProcess } from '../core/install.js'
 import { PMAmbiguousError, PMUnresolvedError, resolvePackageManager } from '../core/pm.js'
-import { ProtocolPathError, findDepEntries, mapProtocol, rewriteDepValue, type RewriteResult } from '../core/rewriter.js'
+import { LOCAL_PROTOCOL_RE, ProtocolPathError, findDepEntries, mapProtocol, rewriteDepValue, type RewriteResult } from '../core/rewriter.js'
 import {
   ManifestParseError,
   WorkspaceNotFoundError,
@@ -40,7 +40,7 @@ export class LinkArgumentError extends Error {
 }
 
 export class LinkInteractionError extends Error {
-  constructor(public kind: 'member-select' | 'non-lpm-ternary', message: string) {
+  constructor(public kind: 'member-select' | 'non-lpm-ternary' | 'conflict-ternary', message: string) {
     super(message)
     this.name = 'LinkInteractionError'
   }
@@ -55,16 +55,14 @@ export class LinkTargetError extends Error {
 }
 
 /** B4 让选取消——内部信号错误（B3：stderr「已取消」+ exit 1），不经 §6 错误表 */
-class LinkCancelledError extends Error {
+export class LinkCancelledError extends Error {
   constructor() {
     super('已取消')
     this.name = 'LinkCancelledError'
   }
 }
 
-const LOCAL_PROTOCOL_RE = /^(link|file|portal):/
-
-interface ResolvedTarget { key: string; libDirAbs: string; source: 'name' | 'path' }
+export interface ResolvedTarget { key: string; libDirAbs: string; source: 'name' | 'path' }
 interface RewriteHit { manifestPath: string; pkgName: string; targetValue: string; fromValue: string; section: string }
 interface FileAgg { content: string; hits: RewriteHit[]; changedCount: number }
 interface LinkedTarget { libDirAbs: string; rel: string }
@@ -99,7 +97,7 @@ function registeredList(cfg: ProjectLpmConfig | null): string {
   return keys.length > 0 ? keys.join(', ') : '（无）'
 }
 
-async function resolveTarget(raw: string, cfg: ProjectLpmConfig | null, rootDir: string, cwd: string): Promise<ResolvedTarget> {
+export async function resolveTarget(raw: string, cfg: ProjectLpmConfig | null, rootDir: string, cwd: string): Promise<ResolvedTarget> {
   const libs = cfg?.libs
   const registered = libs !== undefined && Object.hasOwn(libs, raw) ? libs[raw] : undefined
   if (registered !== undefined) {
@@ -120,7 +118,7 @@ async function resolveTarget(raw: string, cfg: ProjectLpmConfig | null, rootDir:
 }
 
 /** B4 monorepo 根分支（spec §4.4 B）：返回确定成员后的 libDirAbs 与其 name */
-async function resolveMonorepo(libDirAbs: string): Promise<{ libDirAbs: string; name: string }> {
+export async function resolveMonorepo(libDirAbs: string): Promise<{ libDirAbs: string; name: string }> {
   if (!existsSync(join(libDirAbs, 'package.json'))) {
     if (!existsSync(join(libDirAbs, 'pnpm-workspace.yaml'))) {
       throw new LibCheckError('manifest-missing', libDirAbs, `${libDirAbs} 不是 npm 包（缺 package.json）。请确认路径指向包目录。`)

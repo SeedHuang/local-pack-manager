@@ -4,6 +4,7 @@ import { pathToFileURL } from 'node:url'
 import { COMMANDS } from './commands/registry.js'
 import { notImplemented } from './commands/stub.js'
 import { runLink } from './commands/link.js'
+import { runUnlink } from './commands/unlink.js'
 import { runUse } from './commands/use.js'
 import { LPM_VERSION } from './version.js'
 
@@ -33,6 +34,19 @@ export function buildProgram(): Command {
         .option('--dry-run', '仅打印执行计划，不落盘不执行')
         .action(async (targets: string[], options: { watch?: boolean; dryRun?: boolean }) => {
           process.exitCode = await runLink(targets, options)
+        })
+      continue
+    }
+    // S7：unlink 直通版接线（同 use/link 特判；description 不带计划后缀）
+    if (meta.name === 'unlink') {
+      program
+        .command(meta.name)
+        .description(meta.summary)
+        .argument('[targets...]', '注册名或路径')
+        .option('--all', '取消全部已链接依赖')
+        .option('--dry-run', '仅打印执行计划，不落盘不执行')
+        .action(async (targets: string[], options: { all?: boolean; dryRun?: boolean }) => {
+          process.exitCode = await runUnlink(targets, options)
         })
       continue
     }

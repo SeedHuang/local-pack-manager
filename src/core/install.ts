@@ -47,24 +47,56 @@ export class InstallError extends Error {
   }
 }
 
-/** 单次 install（workspace 根执行；stdout/stdin 继承透传——禁死屏；stderr 管道捕获供诊断——计划期修订 2） */
-export async function runInstall(rootDir: string, pm: PackageManagerId): Promise<void> {
-  const args = [...buildInstallCommand(pm)]
-  const command = buildInstallCommandLine(pm)
+/** 组装 InstallError（S6 #16 修正版结构）：首行诊断 + retryAdvice 建议行 */
+function installError(command: string, exitCode: number | null, stderrTail: string, advice: string): InstallError {
+  return new InstallError(
+    command,
+    exitCode,
+    stderrTail,
+    `install 失败（exit ${exitCode ?? '未知'}）：${stderrTail !== '' ? stderrTail : command}\n${advice}`,
+  )
+}
+
+/** 默认建议（S6 #16 修正版 link 向文案——link 调用零改动；裁决 7） */
+function linkRetryAdvice(command: string): string {
+  return `state 已保留，重跑 lpm link 会幂等跳过（E1）——重试：修复报错后在 workspace 根重跑一次 ${command}；若需彻底重来：① git checkout -- <受影响>/package.json ② 删除 .lpm/ ③ 在 workspace 根重跑一次 install——lpm 状态可抛弃重建`
+}
+
+/** install 子进程共通执行体（runInstall / runForceInstall 单源——OCR O1 精神：execa 细节不出本文件） */
+async function execInstall(binary: string, args: readonly string[], rootDir: string, command: string, advice: string): Promise<void> {
   try {
-    await execa(PM_BINARY[pm], args, { cwd: rootDir, stdio: ['inherit', 'inherit', 'pipe'] })
+    await execa(binary, [...args], { cwd: rootDir, stdio: ['inherit', 'inherit', 'pipe'] })
   } catch (err) {
     const e = err as { exitCode?: number | null; stderr?: string | undefined }
     const stderrTail = (e.stderr ?? '').slice(-2000)
-    throw new InstallError(
-      command,
-      e.exitCode ?? null,
-      stderrTail,
-      `install 失败（exit ${e.exitCode ?? '未知'}）：${stderrTail !== '' ? stderrTail : command}\n`
-        + `state 已保留，重跑 lpm link 会幂等跳过（E1）——重试：修复报错后在 workspace 根重跑一次 ${command}；`
-        + '若需彻底重来：① git checkout -- <受影响>/package.json ② 删除 .lpm/ ③ 在 workspace 根重跑一次 install——lpm 状态可抛弃重建',
-    )
+    throw installError(command, e.exitCode ?? null, stderrTail, advice)
   }
+}
+
+/** 单次 install（workspace 根执行，stdio 继承透传输出——禁止死屏）；失败抛 InstallError。
+ *  retryAdvice（S7 裁决 7）：可选建议文案；缺省 = link 向文案 */
+export async function runInstall(rootDir: string, pm: PackageManagerId, retryAdvice?: string): Promise<void> {
+  const command = buildInstallCommandLine(pm)
+  await execInstall(PM_BINARY[pm], buildInstallCommand(pm), rootDir, command, retryAdvice ?? linkRetryAdvice(command))
+}
+
+/** `--force` 重建（S7 F3：pnpm "Already up to date" 软链残留重建）；失败抛 InstallError（advice 由调用方传 unlink 向文案） */
+export async function runForceInstall(rootDir: string, pm: PackageManagerId, retryAdvice?: string): Promise<void> {
+  const command = buildForceInstallCommandLine(pm)
+  await execInstall(PM_BINARY[pm], buildForceInstallCommand(pm), rootDir, command, retryAdvice ?? linkRetryAdvice(command))
+}
+
+/** `--force` 重建参数（四 PM 同形 `install --force`，无 per-PM 表——YAGNI；参数保留仅为与
+ *  buildInstallCommand 签名对称）。注意：**故意未叠加**常规路径的防冻结 flag
+ *  （pnpm/yarn-classic `--no-frozen-lockfile`、yarn-berry `--no-immutable`）。
+ *  若未来出现「CI 冻结配置下 --force 重建失败」的真实信号，在此函数内按 PM 分支补齐，
+ *  勿新建第二份表（OCR 建议；参数行为变更需先评估再动）。 */
+export function buildForceInstallCommand(_pm: PackageManagerId): readonly string[] {
+  return ['install', '--force']
+}
+
+export function buildForceInstallCommandLine(pm: PackageManagerId): string {
+  return `${PM_BINARY[pm]} ${buildForceInstallCommand(pm).join(' ')}`
 }
 
 /** lib 自身 PM 探测（§2 裁决 2）：lib 目录 lockfile——pnpm-lock→pnpm；yarn.lock→subdivideYarn；

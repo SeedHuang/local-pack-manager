@@ -2,8 +2,10 @@ import { describe, expect, it } from 'vitest'
 import { rewriteSamples } from './rewriter-samples.js'
 import {
   findDepEntries,
+  LOCAL_PROTOCOL_RE,
   mapProtocol,
   ProtocolPathError,
+  readDepValues,
   restoreDepValue,
   rewriteDepValue,
 } from '../../src/core/rewriter.js'
@@ -159,5 +161,47 @@ describe('golden 样本矩阵（S5 spec §4.5 #1–#14）', () => {
       const back = restoreDepValue(r.content, s.pkgName, s.originalValue)
       expect(back.content).toBe(s.source)
     }
+  })
+})
+
+describe('readDepValues（S7 §4.3）', () => {
+  it('RDV-1：段序规范化——文件中 dev 在前 deps 在后，输出 deps 先', () => {
+    const src = '{"devDependencies":{"a":"^2.0.0"},"dependencies":{"a":"^1.0.0"}}'
+    expect(readDepValues(src, 'a')).toEqual([
+      { section: 'dependencies', value: '^1.0.0' },
+      { section: 'devDependencies', value: '^2.0.0' },
+    ])
+  })
+  it('RDV-2：转义 key 命中（F2 解码语义）', () => {
+    const src = '{"dependencies":{"@scope\\/pkg":"^1.0.0"}}'
+    expect(readDepValues(src, '@scope/pkg')).toEqual([{ section: 'dependencies', value: '^1.0.0' }])
+  })
+  it('RDV-3：peerDependencies 不入读取面', () => {
+    const src = '{"peerDependencies":{"a":"^1.0.0"},"dependencies":{"a":"link:../a"}}'
+    expect(readDepValues(src, 'a')).toEqual([{ section: 'dependencies', value: 'link:../a' }])
+  })
+  it('RDV-4：空命中 → []', () => {
+    expect(readDepValues('{"dependencies":{"b":"^1.0.0"}}', 'a')).toEqual([])
+  })
+  it('RDV-5：多段多命中全出（link 改写后两段同值）', () => {
+    const src = '{"dependencies":{"a":"link:../a"},"devDependencies":{"a":"link:../a"}}'
+    expect(readDepValues(src, 'a')).toEqual([
+      { section: 'dependencies', value: 'link:../a' },
+      { section: 'devDependencies', value: 'link:../a' },
+    ])
+  })
+  it('RDV-6：畸形转义 value（闭合但 JSON.parse 失败）跳过不致命', () => {
+    const src = '{"dependencies":{"a":"bad\\x31value"}}'
+    expect(readDepValues(src, 'a')).toEqual([])
+  })
+})
+
+describe('LOCAL_PROTOCOL_RE（P1-2 单源提升）', () => {
+  it('LP-1：三协议匹配 / 非 protocol 值不匹配', () => {
+    expect(LOCAL_PROTOCOL_RE.test('link:../a')).toBe(true)
+    expect(LOCAL_PROTOCOL_RE.test('file:./a')).toBe(true)
+    expect(LOCAL_PROTOCOL_RE.test('portal:../a')).toBe(true)
+    expect(LOCAL_PROTOCOL_RE.test('^1.0.0')).toBe(false)
+    expect(LOCAL_PROTOCOL_RE.test('workspace:^')).toBe(false)
   })
 })

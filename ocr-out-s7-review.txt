@@ -1,0 +1,90 @@
+Review complete: 7 finding(s) across 5 selected item(s).
+
+─── src/core/install.ts:89-91 ───
+[maintainability · low] `buildForceInstallCommand` ignores its `pm` parameter and hardcodes
+`['install','--force']`, so the parameter is effectively dead (the underscore signals this was
+noticed, but the parameter still suggests a per-PM behavior that doesn't exist). Note that this also
+drops the per-PM anti-freeze flags applied by `INSTALL_ARGS_BY_PM` in the normal path
+(`--no-frozen-lockfile` for pnpm/yarn-classic, `--no-immutable` for yarn-berry`), so the `--force`
+rebuild can behave differently from the initial install under frozen-lockfile CI settings. If all
+four PMs are genuinely identical here, consider either dropping the parameter or documenting the
+intent (e.g. in the JSDoc) to prevent future drift when a manager's force flags diverge.
+
+
+
+─── src/commands/unlink.ts:244-244 ───
+[bug · high] The three-state decision uses only `representative = values[0].value` (the first hit,
+ordered `dependencies` → `devDependencies` → `optionalDependencies`), but `restoreDepValue` /
+`rewriteDepValue` rewrites **every** matching section in the file with the single state-recorded
+`origValue`. If a package appears in two sections of the same manifest and one of them was changed
+after linking (e.g. `dependencies` still `link:` while the user manually bumped the same package in
+`devDependencies`), a `link:`/`file:`/`portal:` match on `values[0]` silently overwrites the
+manually edited section; the `多段命中值异` stderr warning is emitted but the write proceeds, losing the
+user's edit. Consider deciding per section (only restore sections whose current value matches
+`LOCAL_PROTOCOL_RE`, and route the rest through the conflict path) instead of unconditionally
+rewriting all hits.
+
+
+
+─── src/commands/unlink.ts:209-209 ───
+[bug · medium] Direct bracket indexing on a plain parsed-JSON object returns inherited
+`Object.prototype` members for special names (`constructor`, `toString`, `valueOf`, …):
+`st?.links['constructor']` is non-`undefined`, so the `未链接：… 跳过` branch is bypassed and
+`validateEntry` throws a misleading `LinkStateCorruptError` (“original 缺失”) instead of skipping.
+This is also inconsistent with the own-property guard used just above (`Object.hasOwn(cfg.libs,
+raw)`). Suggest gating the lookup with `Object.hasOwn`: `const entry = st?.links !== undefined &&
+Object.hasOwn(st.links, key) ? st.links[key] : undefined`.
+
+-       const entry = st?.links[key]
++       const entry = st?.links !== undefined && Object.hasOwn(st.links, key) ? st.links[key] : undefined
+
+
+─── src/commands/unlink.ts:295-295 ───
+[bug · low] The `isCancel` rollback only restores the `aggregated` map and `totalChanged`; the
+auxiliary plan arrays `planIdempotent`/`planMissing` already appended while processing this key are
+**not** rolled back. After abandoning a key that earlier produced an idempotent-skip or missing-file
+record, the dry-run output and the final `skippedTotal` still report entries for a key whose state
+entry was intentionally preserved (and the key is double-counted via `planAbandoned`), producing an
+inconsistent report. Consider snapshotting/truncating those arrays alongside `aggregated`, or
+filtering them by the abandoned key.
+
+
+
+─── src/commands/unlink.ts:148-148 ───
+[maintainability · low] `const ws: Workspace = await loadWorkspace(rootDir)` is discarded a few
+lines later with `void ws`. If the call is only needed for its validation side effects
+(`WorkspacePatternError` etc.), drop the binding and the `void` suppression: `await
+loadWorkspace(rootDir)`. Note that removing the annotation also makes the `type Workspace` import
+(line 20) unused, so it should be removed too.
+
+-     const ws: Workspace = await loadWorkspace(rootDir)
++     await loadWorkspace(rootDir)
+
+
+─── src/core/rewriter.ts:97-97 ───
+[maintainability · low] This regex re-hardcodes the protocol set `{link, portal, file}` that is
+already declared by `Protocol` / `PROTOCOL_BY_PM` a few lines above in this same file, so the
+"single source / anti-drift" goal isn't actually met: if a protocol is added to `PROTOCOL_BY_PM`,
+this literal silently desyncs and local-protocol detection in link/unlink would miss it (treated as
+a conflict instead of a linked value). Consider deriving the alternation from the existing map.
+
+- export const LOCAL_PROTOCOL_RE = /^(link|file|portal):/
++ const LOCAL_PROTOCOLS = [...new Set(Object.values(PROTOCOL_BY_PM))]
++ export const LOCAL_PROTOCOL_RE = new RegExp(`^(${LOCAL_PROTOCOLS.join('|')}):`)
+
+
+─── src/commands/unlink.ts:223-224 ───
+[bug · medium] The "manifest missing" fallback relies on `existsSync`, but state keys are not
+validated for format (`validateEntry` only checks the object shape and the *values*). A
+corrupted/legacy key that normalizes to an existing **directory** — e.g. `''` (`join(rootDir,
+...''.split('/'))` === rootDir), `'.'`, `'/'`, or a directory-shaped key like `'apps/web'` — passes
+the `existsSync` guard, then `readFileSync(manifestPath, 'utf8')` at line 234 throws `EISDIR`, which
+is not in the `KNOWN` list in `reportError`, so it escapes `runUnlink` as a raw unhandled rejection
+instead of the intended warn-and-skip path (spec §4.4 D1/P2-6). Suggest also requiring a regular
+file, e.g. `statSync(manifestPath).isFile()` (import `statSync` from `node:fs`), or wrapping the
+read in try/catch and routing it to the same warning branch.
+
+          const manifestPath = join(rootDir, ...origKey.split('/'))
+-         if (!existsSync(manifestPath)) {
++         if (!existsSync(manifestPath) || !statSync(manifestPath).isFile()) {
+

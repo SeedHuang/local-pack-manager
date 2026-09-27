@@ -93,6 +93,10 @@ export function restoreDepValue(manifestSource: string, pkgName: string, origina
 
 // ─────────────────────────── 文本级依赖改写引擎（S5 spec §4.4）───────────────────────────
 
+/** 本地协议判定单源（S7 P1-2 + OCR：由 PROTOCOL_BY_PM 派生——新增协议自动同步，防字面量漂移） */
+const LOCAL_PROTOCOLS = [...new Set(Object.values(PROTOCOL_BY_PM))]
+export const LOCAL_PROTOCOL_RE = new RegExp(`^(${LOCAL_PROTOCOLS.join('|')}):`)
+
 // 改写段名单单源（F6；T2 评审期勘误，计划期修订 6）：REWRITE_SECTIONS 三改段；
 // peerDependencies 仅扫描供 findDepEntries 警告数据源（不改写、不入 keys）
 const REWRITE_SECTIONS = ['dependencies', 'devDependencies', 'optionalDependencies'] as const
@@ -218,6 +222,21 @@ export function findDepEntries(manifestSource: string, pkgName: string): string[
   const out: string[] = []
   for (const section of SCAN_SECTIONS) {
     if (hits.some((h) => h.section === section)) out.push(section)
+  }
+  return out
+}
+
+/** 读取 pkgName 在三改写段的全部当前值（S7 §4.3）：规范段序输出、段内按文件出现序；
+ *  peer 不入读取面（link 未改 peer，unlink 恢复不碰）；safeJsonParse 失败的命中跳过不致命 */
+export function readDepValues(manifestSource: string, pkgName: string): Array<{ section: string; value: string }> {
+  const hits = scanManifest(manifestSource, pkgName)
+  const out: Array<{ section: string; value: string }> = []
+  for (const section of REWRITE_SECTIONS) {
+    for (const h of hits) {
+      if (h.section !== section) continue
+      const v = safeJsonParse(h.literal)
+      if (v !== null) out.push({ section, value: v })
+    }
   }
   return out
 }

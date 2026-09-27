@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 vi.mock('execa', () => ({ execa: vi.fn() }))
 
 import { execa } from 'execa'
-import { InstallError, buildInstallCommand, buildInstallCommandLine, detectLibPM, pmExecutable, runInstall, spawnBuildWatch } from '../../src/core/install.js'
+import { InstallError, buildForceInstallCommand, buildForceInstallCommandLine, buildInstallCommand, buildInstallCommandLine, detectLibPM, pmExecutable, runForceInstall, runInstall, spawnBuildWatch } from '../../src/core/install.js'
 
 const dirs: string[] = []
 function makeDir(files: Record<string, string> = {}): string {
@@ -115,5 +115,58 @@ describe('spawnBuildWatch', () => {
     expect(execa).toHaveBeenCalledWith('yarn', ['run', 'build:watch'], { cwd: dir, stdio: 'inherit', reject: false })
     expect(pmExecutable('yarn-classic')).toBe('yarn')
     expect(buildInstallCommandLine('yarn-berry')).toBe('yarn install --no-immutable')
+  })
+})
+
+describe('buildForceInstallCommand（S7 §4.3）', () => {
+  it('T3-9：四 PM 同形 install --force；yarn-berry 不带 --immutable', () => {
+    expect(buildForceInstallCommand('pnpm')).toEqual(['install', '--force'])
+    expect(buildForceInstallCommand('npm')).toEqual(['install', '--force'])
+    expect(buildForceInstallCommand('yarn-classic')).toEqual(['install', '--force'])
+    expect(buildForceInstallCommand('yarn-berry')).toEqual(['install', '--force'])
+    expect(buildForceInstallCommandLine('pnpm')).toBe('pnpm install --force')
+    expect(buildForceInstallCommandLine('yarn-berry')).toBe('yarn install --force')
+  })
+})
+
+describe('runInstall/runForceInstall retryAdvice（裁决 7）', () => {
+  it('T3-10：缺省文案 = link 向（含「重跑 lpm link 会幂等跳过」）', async () => {
+    vi.mocked(execa).mockRejectedValue({ exitCode: 1, stderr: 'boom' })
+    try {
+      await runInstall(makeDir(), 'pnpm')
+      expect.unreachable()
+    } catch (e) {
+      expect((e as InstallError).message).toContain('重跑 lpm link 会幂等跳过')
+    }
+  })
+  it('T3-11：传入自定义 advice 透传（unlink 向样例）', async () => {
+    vi.mocked(execa).mockRejectedValue({ exitCode: 1, stderr: 'boom' })
+    const advice = 'state 已保留（文件已恢复），可直接重跑 lpm unlink——恢复段幂等跳过直达 install'
+    try {
+      await runInstall(makeDir(), 'pnpm', advice)
+      expect.unreachable()
+    } catch (e) {
+      expect((e as InstallError).message).toContain('可直接重跑 lpm unlink')
+      expect((e as InstallError).message).not.toContain('重跑 lpm link')
+    }
+  })
+  it('T3-12：runForceInstall 成功——execa 以 force 参数调用', async () => {
+    const dir = makeDir()
+    vi.mocked(execa).mockResolvedValue({ exitCode: 0 } as never)
+    await runForceInstall(dir, 'npm')
+    expect(execa).toHaveBeenCalledWith('npm', ['install', '--force'], { cwd: dir, stdio: ['inherit', 'inherit', 'pipe'] })
+  })
+  it('T3-13：runForceInstall 失败 → InstallError（command = force 串 + advice 透传）', async () => {
+    vi.mocked(execa).mockRejectedValue({ exitCode: 7, stderr: 'EACCES' })
+    try {
+      await runForceInstall(makeDir(), 'pnpm', '自定义建议')
+      expect.unreachable()
+    } catch (e) {
+      const err = e as InstallError
+      expect(err.command).toBe('pnpm install --force')
+      expect(err.exitCode).toBe(7)
+      expect(err.stderrTail).toBe('EACCES')
+      expect(err.message).toContain('自定义建议')
+    }
   })
 })

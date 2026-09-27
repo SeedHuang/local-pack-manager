@@ -533,3 +533,40 @@ describe('E6/last/watch/dry-run/O4', () => {
     expect(out).not.toContain('yarn-berry install')
   })
 })
+
+describe('S6 留观补测（N-7/M-4）', () => {
+  it('N7-22：§7.2 #22 批量遇错即停——good+bad 混批 → exit 1 零写盘', async () => {
+    const ws = makeWs()
+    const lib = makeLib()
+    const before = readFileSync(relPkg(ws, 'apps/web'), 'utf8')
+    const r = await runLink([lib, join(ws, 'no-such-dir')], {}, ws)
+    expect(r).toBe(1)
+    expect(stateOf(ws)).toBeNull() // 聚合在内存——遇错即停零写盘
+    expect(readFileSync(relPkg(ws, 'apps/web'), 'utf8')).toBe(before)
+  })
+  it('N7-13：§7.2 #13 同 key 去重——注册名 + 同 lib 路径 → 跳过合计含去重 1 处', async () => {
+    const ws = makeWs()
+    const lib = makeLib()
+    writeFileSync(
+      join(ws, 'lpm.config.json'),
+      JSON.stringify({ version: 1, packageManager: 'pnpm', libs: { '@t/lib': relPathOf(ws, lib) } }),
+      'utf8',
+    )
+    vi.mocked(execa).mockResolvedValue({ exitCode: 0 } as never)
+    const out = captureOut()
+    const r = await runLink(['@t/lib', lib], {}, ws)
+    expect(r).toBe(0)
+    expect(out.stdout()).toContain('已链接跳过：1 处') // dedupSkipped 计入 J2
+    out.clear()
+  })
+  it('N7-20：§7.2 #20 --watch dry-run → watch 行断言', async () => {
+    const ws = makeWs()
+    const lib = makeLib()
+    const out = captureOut()
+    const r = await runLink([lib], { watch: true, dryRun: true }, ws)
+    expect(r).toBe(0)
+    expect(out.stdout()).toContain('watch：拉起')
+    expect(out.stdout()).toContain('run build:watch')
+    out.clear()
+  })
+})
