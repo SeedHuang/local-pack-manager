@@ -251,22 +251,8 @@ export async function loadWorkspace(rootDir: string): Promise<Workspace> {
     }
   }
 
-  // pattern 前置校验（§4.5.3：错误前置、一次报全；以空 relDir 探测调用匹配器完成校验，
-  // WorkspacePatternError 重抛时补全 manifestPath 定位——§4.3 重抛机制）
-  for (const p of patterns) {
-    try {
-      matchWorkspacePattern(p, '')
-    } catch (e) {
-      if (e instanceof WorkspacePatternError) {
-        throw new WorkspacePatternError(
-          e.pattern,
-          patternSource,
-          e.message.replace('）。支持：', `）。清单：${patternSource}。支持：`),
-        )
-      }
-      throw e
-    }
-  }
+  // pattern 前置校验（§4.5.3：错误前置、一次报全）——OCR O5：与 listWorkspaceMembers 共用 validatePatterns
+  validatePatterns(patterns, patternSource)
 
   const members: PackageJsonInfo[] = [
     {
@@ -276,45 +262,7 @@ export async function loadWorkspace(rootDir: string): Promise<Workspace> {
       isRoot: true,
     },
   ]
-
-  if (patterns.length > 0) {
-    const positives = patterns.filter((p) => !p.startsWith('!'))
-    const negatives = patterns.filter((p) => p.startsWith('!')).map((p) => p.slice(1))
-    const collected: string[] = []
-    const walk = (dir: string, rel: string): void => {
-      const entries = readdirSync(dir, { withFileTypes: true }).sort((a, b) =>
-        a.name < b.name ? -1 : a.name > b.name ? 1 : 0,
-      )
-      for (const entry of entries) {
-        if (entry.isSymbolicLink()) continue
-        if (!entry.isDirectory()) continue
-        if (entry.name === 'node_modules' || entry.name.startsWith('.')) continue
-        const childRel = rel === '' ? entry.name : `${rel}/${entry.name}`
-        collected.push(childRel)
-        walk(path.join(dir, entry.name), childRel)
-      }
-    }
-    walk(rootDir, '')
-
-    // 正模式并集（Set 保持首次命中序 = DFS 字典序），再依序应用负模式剔除（§5.6/5.7）
-    const hit = new Set<string>()
-    for (const rel of collected) {
-      if (positives.some((p) => matchWorkspacePattern(p, rel))) hit.add(rel)
-    }
-    for (const rel of hit) {
-      if (negatives.some((p) => matchWorkspacePattern(p, rel))) continue
-      const manifestPath = path.join(rootDir, rel, 'package.json')
-      if (!existsSync(manifestPath)) continue   // 命中目录无 package.json → 非成员（后代已在 collected 中）
-      const manifest = readManifest(manifestPath)
-      members.push({
-        dir: path.join(rootDir, rel),
-        manifestPath,
-        name: typeof manifest['name'] === 'string' ? manifest['name'] : '',
-        isRoot: false,
-      })
-    }
-  }
-
+  members.push(...collectMembers(rootDir, patterns))
   return { rootDir, manifestFormat, members }
 }
 
@@ -335,4 +283,82 @@ export async function findDependents(ws: Workspace, pkgName: string): Promise<De
     }
   }
   return hits
+}
+
+/** pattern 前置校验（§4.5.3 错误前置、一次报全）：以空 relDir 探测调用匹配器完成校验；
+ *  WorkspacePatternError 重抛时补全清单路径定位——loadWorkspace 与 listWorkspaceMembers 共用（OCR O5 单源） */
+function validatePatterns(patterns: string[], patternSource: string): void {
+  for (const p of patterns) {
+    try {
+      matchWorkspacePattern(p, '')
+    } catch (e) {
+      if (e instanceof WorkspacePatternError) {
+        throw new WorkspacePatternError(
+          e.pattern,
+          patternSource,
+          e.message.replace('）。支持：', `）。清单：${patternSource}。支持：`),
+        )
+      }
+      throw e
+    }
+  }
+}
+
+/** loadWorkspace 与 listWorkspaceMembers 共用的成员展开（计划期修订 1：单一真相抽取）。
+ *  patterns 为空 → 空数组；正模式并集（Set 保持首次命中序 = DFS 字典序）→ 依序负模式剔除；
+ *  命中目录无 package.json → 非成员（后代已在 collected 中）；manifest 严格读取（§4.2 读取规约）。 */
+function collectMembers(rootDir: string, patterns: string[]): PackageJsonInfo[] {
+  if (patterns.length === 0) return []
+  const positives = patterns.filter((p) => !p.startsWith('!'))
+  const negatives = patterns.filter((p) => p.startsWith('!')).map((p) => p.slice(1))
+  const collected: string[] = []
+  const walk = (dir: string, rel: string): void => {
+    const entries = readdirSync(dir, { withFileTypes: true }).sort((a, b) =>
+      a.name < b.name ? -1 : a.name > b.name ? 1 : 0,
+    )
+    for (const entry of entries) {
+      if (entry.isSymbolicLink()) continue
+      if (!entry.isDirectory()) continue
+      if (entry.name === 'node_modules' || entry.name.startsWith('.')) continue
+      const childRel = rel === '' ? entry.name : `${rel}/${entry.name}`
+      collected.push(childRel)
+      walk(path.join(dir, entry.name), childRel)
+    }
+  }
+  walk(rootDir, '')
+  const hit = new Set<string>()
+  for (const rel of collected) {
+    if (positives.some((p) => matchWorkspacePattern(p, rel))) hit.add(rel)
+  }
+  const out: PackageJsonInfo[] = []
+  for (const rel of hit) {
+    if (negatives.some((p) => matchWorkspacePattern(p, rel))) continue
+    const manifestPath = path.join(rootDir, rel, 'package.json')
+    if (!existsSync(manifestPath)) continue
+    const manifest = readManifest(manifestPath)
+    out.push({
+      dir: path.join(rootDir, rel),
+      manifestPath,
+      name: typeof manifest['name'] === 'string' ? manifest['name'] : '',
+      isRoot: false,
+    })
+  }
+  return out
+}
+
+/** B4 形态 A（S6 spec §4.3/§4.4 B1）：lib 路径是无 package.json 的 pnpm monorepo 根
+ *  （本地有 pnpm-workspace.yaml）→ 解析 packages patterns 展开成员（不含根——根无 manifest）。
+ *  无 pnpm-workspace.yaml → WorkspaceNotFoundError('invalid-root')；成员展开与 loadWorkspace
+ *  共用 collectMembers（单一真相）；pattern 语义错误前置校验（同 loadWorkspace 重抛机制）。 */
+export async function listWorkspaceMembers(rootDir: string): Promise<PackageJsonInfo[]> {
+  const yamlPath = path.join(rootDir, 'pnpm-workspace.yaml')
+  if (!existsSync(yamlPath)) {
+    throw new WorkspaceNotFoundError(
+      'invalid-root',
+      `${rootDir} 不是 npm 包（缺 package.json）且缺 pnpm-workspace.yaml，无法作为 lib 链接。请确认路径指向包目录或 pnpm monorepo 根。`,
+    )
+  }
+  const patterns = parsePackagesYaml(readFileSync(yamlPath, 'utf8'), yamlPath)
+  validatePatterns(patterns, yamlPath)
+  return collectMembers(rootDir, patterns)
 }

@@ -1,0 +1,152 @@
+Review complete: 11 finding(s) across 6 selected item(s).
+
+─── src/state/atomic.ts:29-30 ───
+[maintainability · low] `writeTextFileAtomic` duplicates the atomic-write core of
+`writeJsonFileAtomic` (tmp naming with pid+uuid, `writeFileSync` → `renameSync` → orphan-tmp
+cleanup). The two implementations can drift (e.g. if durability handling is added to one). Consider
+extracting a private `writeFileAtomic(filePath, data)` helper that both public functions delegate to
+— `writeJsonFileAtomic` would only add the JSON.stringify guard and trailing `\n`.
+
+- export function writeTextFileAtomic(filePath: string, content: string): void {
++ function writeFileAtomic(filePath: string, data: string): void {
+    const tmp = `${filePath}.${process.pid}.${randomUUID()}.tmp`
+
+
+─── src/core/linkcheck.ts:110-111 ───
+[bug · medium] The entry-existence check treats *any* existing path as a valid entry (`existsSync`
+is true for directories too). For an extensionless `main`/`exports` target (e.g. `"main": "./dist"`,
+a valid npm form that resolves to `./dist/index.js`), `resolveEntryCandidates` emits both the
+directory itself and the appended `index.js`; `existsSync(dist)` returns true, so a missing build
+output (`dist/index.js`) silently passes the B5 check — the exact failure this guard exists to
+catch. Require the candidate to be a regular file so only the appended/actual entry file satisfies
+the check.
+
+    const entryCandidates = resolveEntryCandidates(libDirAbs, manifest)
+-   if (entryCandidates !== null && !entryCandidates.some((p) => existsSync(p))) {
++   if (entryCandidates !== null && !entryCandidates.some((p) => existsSync(p) && statSync(p).isFile())) {
+
+
+─── src/commands/link.ts:350-352 ───
+[bug · medium] `originals` is built with `new Map(hits.map(...))`, which keeps the **last** entry
+for a duplicated `manifestPath`, but the G1 comment/spec (§4.4 E6a) requires the **first** hit value
+("同文件同 lib 多段命中原值异 → original 记首个命中值"). Since `findDependents` emits one hit per dependency section,
+a package declared in both `dependencies` and `devDependencies` of the same manifest produces two
+hits in section order; the persisted `original` then records the
+`devDependencies`/`optionalDependencies` range, and `unlink` can restore the wrong range. The `??
+group[0]?.currentValue` fallback in G1 never applies here because the key is always present. Build
+the map first-wins (or take `group[0].currentValue` in G1).
+
+        } else {
+-         originals = new Map(hits.map((h) => [h.manifestPath, h.currentValue] as const))
++         originals = new Map()
++         for (const h of hits) if (!originals.has(h.manifestPath)) originals.set(h.manifestPath, h.currentValue)
+        }
+
+
+─── src/commands/link.ts:427-427 ───
+[bug · medium] Because the E1 idempotency check (`st?.links[key] !== undefined`) keys solely on the
+state file, this write order is not self-healing: if a `writeTextFileAtomic` (E6b) throws mid-loop,
+or `runInstall` (E6c) fails, state already claims the lib is linked, so a rerun of `lpm link` prints
+“已链接…跳过” and returns 0 without rewriting the remaining manifests or retrying the failed install.
+This also makes the InstallError advice “可直接重跑 lpm link” ineffective for install failures. Consider
+recording a per-link completion marker (or re-running install when the target is already present in
+state but manifests/install are known incomplete).
+
+
+
+─── src/commands/link.ts:404-406 ───
+[maintainability · low] This dry-run guard is redundant: `isNew` is computed as `cfg?.libs[key] !==
+relPath`, so it is already `true` whenever `cfg?.libs[u.key] === undefined`. Also note `planUpserts`
+is populated on every run but only read inside the `opts.dryRun === true` branch, so the array is
+dead work on the real (non-dry-run) path. Simplify the condition to `if (u.isNew)` and consider only
+populating `planUpserts` when `opts.dryRun` is set.
+
+            for (const u of planUpserts) {
+-             if (u.isNew || cfg?.libs[u.key] === undefined) process.stdout.write(`  注册 upsert：${u.key} → ${u.rel}（新增/更新）\n`)
++             if (u.isNew) process.stdout.write(`  注册 upsert：${u.key} → ${u.rel}（新增/更新）\n`)
+            }
+
+
+─── src/commands/link.ts:478-483 ───
+[maintainability · low] The result-printing loop over `aggregated` (`for (const [mp, entry] of
+aggregated)` → `h.section.h.pkgName：from → target`) is duplicated between the dry-run plan (line
+~407) and the final completion message (line ~478). Extracting a small helper avoids the two outputs
+drifting apart when the format changes.
+
+
+
+─── src/commands/link.ts:262-262 ───
+[style · low] `st` is never reassigned (only read), so it should be `const` (ESLint `prefer-const`).
+
+-     let st: LinkState | null = await readState(rootDir)
++     const st: LinkState | null = await readState(rootDir)
+
+
+─── src/core/install.ts:93-93 ───
+[bug · medium] Signal-terminated children are classified as failures. On Ctrl+C the whole foreground
+process group receives SIGINT (and the SIGINT handler in link.ts additionally calls `kill()` ->
+SIGTERM), so the build:watch child exits via signal: execa (^10) then reports `exitCode ===
+undefined` with `signal` set. `r.exitCode === 0` is false, so `failure` resolves to `new Error('exit
+undefined')` and link.ts prints a spurious `警告：build:watch 异常退出…（链接本身不受影响）` on a completely normal
+shutdown — contradicting spec §4.4 H5 (Ctrl+C = non-error termination, exit 0). Distinguish
+intentional termination from a real failure, e.g. treat a set `signal`/`isTerminated` as normal
+exit.
+
+-       if (r.exitCode === 0) return null
++       if (r.exitCode === 0 || r.signal !== undefined) return null
+
+
+─── src/core/linkcheck.ts:82-83 ───
+[bug · low] `main` is used as a fallback even when `exports` exists but yields no usable string
+candidates. Spec §4.4 C5 only takes `main` when `exports` is absent (`无 exports → 取 main`), and
+explicitly exempts `仅 types` from the entry check (same as this function's own doc comment:
+`无可取得候选（无 exports 无 main，或仅 types）→ null`). As written, a package with e.g. `{ "main":
+"./dist/index.js", "exports": { ".": { "types": "./dist/index.d.ts" } } }` whose build output is
+absent will raise `entry-missing` instead of being exempted — a B5-style false positive, since Node
+never resolves `main` once `exports` is declared. Consider gating the fallback on
+`manifest['exports'] === undefined`.
+
+    let candidates = collectEntryCandidates(manifest['exports'])
+-   if (candidates.length === 0 && typeof manifest['main'] === 'string') {
++   if (candidates.length === 0 && manifest['exports'] === undefined && typeof manifest['main'] === 'string') {
+
+
+─── src/commands/link.ts:375-377 ───
+[bug · low] `entry.hits` accumulates **every** hit of the target, including sections that are
+already at the target protocol value (i.e. `result.unchangedKeys`). Spec §4.4 J1 says the O4/dry-run
+“改写” detail lines are `changedKeys` 逐条, and J2 counts `unchangedKeys` separately under `已链接跳过`. As
+written, an idempotent section is still pushed here, so the printed detail can show a no-op `X → X`
+line whose length disagrees with the header count `M` (= `changedCount`), and the same section is
+reported both as an “改写” line and in the `已链接跳过` total. This happens whenever a manifest has one
+section already at the correct `link:`/`file:`/`portal:` value (e.g. user manually linked the
+correct path before `lpm link` took over). Consider only pushing changed sections.
+
++         const changedSet = new Set(result.changedKeys)
+          for (const h of group) {
++           if (!changedSet.has(`${h.section}.${check.name}`)) continue
+            entry.hits.push({ manifestPath, pkgName: check.name, targetValue, fromValue: h.currentValue, section: h.section })
+          }
+
+
+─── src/commands/link.ts:278-279 ───
+[bug · low] The exact-duplicate fast path (`seenRaw`) silently skips without incrementing
+`dedupSkipped`, while the same-key path below does count it. The variable's own comment states it
+feeds J2's `K` (「K 含去重跳过」), but the spec's canonical duplicate example — `lpm link A A` (§4.4 E5) —
+is caught here and therefore never counted, whereas an equivalent representation (`lpm link ./a
+/abs/a`) is. This makes the `已链接跳过` total depend on how the duplicate was spelled. Count the
+`seenRaw` skip too so both dedup mechanisms are consistent.
+
+-       if (seenRaw.has(raw)) continue
++       if (seenRaw.has(raw)) {
++         dedupSkipped++
++         continue
++       }
+        seenRaw.add(raw)
+
+
+LLM retry report summary: 1 of 89 requests affected -- 1 request cancelled
+
+Context compaction (1 request):
+- src/cli.ts,src/commands/link.ts: cancelled (HTTP 200)
+
+Per-attempt detail: --format json (retry_report).

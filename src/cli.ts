@@ -3,6 +3,7 @@ import { realpathSync } from 'node:fs'
 import { pathToFileURL } from 'node:url'
 import { COMMANDS } from './commands/registry.js'
 import { notImplemented } from './commands/stub.js'
+import { runLink } from './commands/link.js'
 import { runUse } from './commands/use.js'
 import { LPM_VERSION } from './version.js'
 
@@ -19,6 +20,19 @@ export function buildProgram(): Command {
         .addArgument(new Argument('[pm]', 'pnpm | npm | yarn').choices(['pnpm', 'npm', 'yarn']))
         .action(async (pm: 'pnpm' | 'npm' | 'yarn' | undefined) => {
           process.exitCode = await runUse(pm)
+        })
+      continue
+    }
+    // S6：link 直通版接线（同 use 特判；description 不带计划后缀）
+    if (meta.name === 'link') {
+      program
+        .command(meta.name)
+        .description(meta.summary)
+        .argument('[targets...]', '注册名或路径')
+        .option('--watch', '链接后拉起 lib 的 build:watch 子进程')
+        .option('--dry-run', '仅打印执行计划，不落盘不执行')
+        .action(async (targets: string[], options: { watch?: boolean; dryRun?: boolean }) => {
+          process.exitCode = await runLink(targets, options)
         })
       continue
     }

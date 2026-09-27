@@ -5,7 +5,9 @@ import {
   ManifestParseError,
   WorkspaceNotFoundError,
   WorkspacePatternError,
+  listWorkspaceMembers,
   loadWorkspace,
+  type PackageJsonInfo,
   type Workspace,
 } from '../../src/core/workspace.js'
 
@@ -131,5 +133,33 @@ describe('loadWorkspace（spec §4.5）', () => {
   it('packages: 空值 + 行内注释 → 仅 root（§5 YAML.5）', async () => {
     const ws = await loadWorkspace(FIX('packages-comment-empty'))
     expect(ws.members).toHaveLength(1)
+  })
+})
+
+describe('listWorkspaceMembers（S6 spec §4.3 B4 形态 A / 计划期修订 1）', () => {
+  const relsOf = (members: PackageJsonInfo[], rootDir: string) =>
+    members.map((m) => path.relative(rootDir, m.dir).replaceAll('\\', '/')).sort()
+
+  it('用例 T1-4：正常展开 + 负模式剔除（复用 monorepo-pnpm fixture，isRoot 全 false）', async () => {
+    const rootDir = FIX('monorepo-pnpm')
+    const members = await listWorkspaceMembers(rootDir)
+    expect(relsOf(members, rootDir)).toEqual(['apps/web', 'docs', 'packages/server'])
+    expect(members.every((m) => !m.isRoot)).toBe(true)
+    expect(members.some((m) => m.dir.includes('legacy'))).toBe(false)
+  })
+
+  it('用例 T1-5：无 pnpm-workspace.yaml → invalid-root（single-package fixture）', async () => {
+    await expect(listWorkspaceMembers(FIX('single-package'))).rejects.toThrowError(WorkspaceNotFoundError)
+  })
+
+  it('用例 T1-6：空 patterns → 空数组（monorepo-empty-patterns fixture）', async () => {
+    expect(await listWorkspaceMembers(FIX('monorepo-empty-patterns'))).toEqual([])
+  })
+
+  it('用例 T1-7：形态 A——根无 package.json 仍可展开（lib-root-no-manifest fixture）', async () => {
+    const rootDir = FIX('lib-root-no-manifest')
+    const members = await listWorkspaceMembers(rootDir)
+    expect(relsOf(members, rootDir)).toEqual(['packages/one', 'packages/two'])
+    expect(members.map((m) => m.name).sort()).toEqual(['lib-one', 'lib-two'])
   })
 })

@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { writeTextFileAtomic } from '../../src/state/atomic.js'
 import {
   LpmStateParseError,
   deleteState,
@@ -278,5 +279,43 @@ describe('ensureGitignoreEntry（S4 spec §4.4 归一化口径，F4 含 BOM）',
     // present 零改动：BOM 与原内容原样保留
     expect(readFileSync(join(dir, '.gitignore'), 'utf8').charCodeAt(0)).toBe(0xfeff)
     expect(readFileSync(join(dir, '.gitignore'), 'utf8')).toBe('\uFEFF.lpm/\nnode_modules/\n')
+  })
+})
+
+describe('writeTextFileAtomic（S6 spec §4.3）', () => {
+  it('用例 T1-1：逐字节写回（BOM/CRLF/中文 byte 级保真）且无 tmp 残留', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'lpm-tfa-'))
+    try {
+      const p = join(dir, 'package.json')
+      const content = '\uFEFF{\r\n  "name": "包",\r\n  "dependencies": {\r\n    "x": "link:../lib"\r\n  }\r\n}\r\n'
+      writeTextFileAtomic(p, content)
+      expect(readFileSync(p, 'utf8')).toBe(content)
+      expect(readdirSync(dir).filter((f) => f.endsWith('.tmp'))).toEqual([])
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('用例 T1-2：目标为已存在目录 → rename 失败 → 原错误重抛且 tmp 清理', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'lpm-tfa-'))
+    try {
+      const target = join(dir, 'occupied')
+      mkdirSync(target)
+      expect(() => writeTextFileAtomic(target, 'x')).toThrow()
+      expect(readdirSync(dir).filter((f) => f.endsWith('.tmp'))).toEqual([])
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('用例 T1-3：父目录缺失 → write 失败重抛且目标不存在', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'lpm-tfa-'))
+    try {
+      const p = join(dir, 'no-such', 'package.json')
+      expect(() => writeTextFileAtomic(p, 'x')).toThrow()
+      expect(existsSync(p)).toBe(false)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
   })
 })

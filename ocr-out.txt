@@ -1,0 +1,157 @@
+Review complete: 15 finding(s) across 6 selected item(s).
+
+─── src/state/atomic.ts:29-38 ───
+[maintainability · low] `writeTextFileAtomic` duplicates the atomic-write core of
+`writeJsonFileAtomic` (tmp naming with pid+uuid, `writeFileSync` → `renameSync` → orphan-tmp
+cleanup). The two implementations can drift apart over time. Consider extracting a private
+`writeFileAtomic(filePath, data)` helper and have both public functions delegate to it
+(`writeJsonFileAtomic` would just prepend the `\n` and the JSON.stringify guard).
+
+- export function writeTextFileAtomic(filePath: string, content: string): void {
++ function writeFileAtomic(filePath: string, data: string): void {
+    const tmp = `${filePath}.${process.pid}.${randomUUID()}.tmp`
+    try {
+-     writeFileSync(tmp, content, 'utf8')
++     writeFileSync(tmp, data, 'utf8')
+      renameSync(tmp, filePath) // Node 在 Windows 对已存在目标可覆盖（REPLACE_EXISTING 语义）；目标为目录时抛错
+    } catch (err) {
+      rmSync(tmp, { force: true })
+      throw err
+    }
+  }
+
+
+─── src/core/workspace.ts:365-365 ───
+[maintainability · medium] This pattern pre-validation loop is a copy of the one in `loadWorkspace`
+(lines 256–269), and it relies on the literal substring `'）。支持：'` from the message produced in
+`globmatch.ts`. If that wording ever changes, `replace()` silently no-ops, so the user loses the
+`清单：<yamlPath>` context and the error points at the wrong file (`matchWorkspacePattern` was given
+`manifestPath=''`). Consider extracting a shared helper (e.g. `validatePatterns(patterns,
+manifestPath)`) used by both `loadWorkspace` and `listWorkspaceMembers`, so the re-throw/coupling
+logic lives in one place.
+
+
+
+─── src/core/install.ts:57-58 ───
+[maintainability · low] The `package-lock.json` branch returns the same value as the fallback
+immediately below it, so it is effectively redundant and obscures the documented pnpm-lock >
+yarn.lock > package-lock priority order. Drop the branch (the priority order is already expressed by
+the ordering of the preceding checks).
+
+-   if (existsSync(join(libDirAbs, 'package-lock.json'))) return 'npm'
+    return 'npm'
+
+
+─── src/core/install.ts:16-17 ───
+[maintainability · low] `buildInstallCommand` returns the module-level `INSTALL_ARGS_BY_PM[pm]`
+array by reference. `readonly string[]` is compile-time only, so any current or future caller that
+mutates (or hands to something that mutates) the result would corrupt the single-source argument
+table for all subsequent calls. Return a defensive copy.
+
+  export function buildInstallCommand(pm: PackageManagerId): readonly string[] {
+-   return INSTALL_ARGS_BY_PM[pm]
++   return [...INSTALL_ARGS_BY_PM[pm]]
+
+
+─── src/commands/link.ts:405-405 ───
+[maintainability · medium] This is a triple-nested ternary (disallowed by the style rules) and it
+re-implements the per-PM install flag table that `core/install.ts` owns as the single source of
+truth (spec §2 ruling 3: `buildInstallCommand`). If the two tables ever diverge, the dry-run plan
+misrepresents what `runInstall` will actually execute. `buildInstallCommand` is already exported;
+reuse it here.
+
+-       const flags = pm === 'pnpm' ? 'install --no-frozen-lockfile' : pm === 'yarn-berry' ? 'install --no-immutable' : pm === 'yarn-classic' ? 'install --no-frozen-lockfile' : 'install'
++       const flags = buildInstallCommand(pm).join(' ')
+
+
+─── src/commands/link.ts:7-7 ───
+[maintainability · low] `type PackageManagerId` is imported but never referenced in this file (`pm`
+is inferred from `pmResolution.pm`). Dead import — remove it to keep the import surface clean.
+
+- import { PMAmbiguousError, PMUnresolvedError, resolvePackageManager, type PackageManagerId } from '../core/pm.js'
++ import { PMAmbiguousError, PMUnresolvedError, resolvePackageManager } from '../core/pm.js'
+
+
+─── src/commands/link.ts:70-70 ───
+[maintainability · low] `LinkedTarget.key` is never read: `linkedTargets` is only iterated for
+`t.rel` / `t.libDirAbs` / `.length`, and the pushed `key` is dead. Drop the unused field.
+
+- interface LinkedTarget { key: string; libDirAbs: string; rel: string }
++ interface LinkedTarget { libDirAbs: string; rel: string }
+
+
+─── src/commands/link.ts:197-199 ───
+[bug · medium] When `headUsable` is false, the `head` option still carries value `'head'` and
+remains selectable; choosing it returns a partial/empty `headValues`, and the E5 fallback
+`originals.get(h.manifestPath) ?? h.currentValue` then records the current local-protocol value
+(`link:`/`file:`/`portal:`) as `state.original`. That is exactly the outcome the manual branch
+rejects ("否则 unlink 会「恢复」成 link 路径"), so the validation gap silently defeats the guard. Only offer
+the option when usable (or guard `sel === 'head'` on `headUsable`).
+
+-   options.push(headUsable
+-     ? { value: 'head', label: '从 git HEAD 读取原值' }
+-     : { value: 'head', label: `从 git HEAD 读取原值（不可用：${headReason}）` })
++   if (headUsable) options.push({ value: 'head', label: '从 git HEAD 读取原值' })
+
+
+─── src/commands/link.ts:365-366 ───
+[bug · low] These counters are accumulated once per member of `hits`, but `findDependents` emits one
+hit per dependency section, so a package listed in more than one section of the same manifest
+produces multiple hits for that manifest. `rewriteDepValue` already rewrites/records every matching
+section on the first call, so the subsequent hit re-scans the (now unchanged) content and inflates
+`unchangedTotal` (and thus `skippedTotal`), while duplicating the line in `entry.hits`. Consider
+deduping hits per manifest.
+
+
+
+─── src/commands/link.ts:51-53 ───
+[maintainability · medium] `LinkTargetError` declares `public name: string` (intended to carry the
+package name), but the constructor body then does `this.name = 'LinkTargetError'`. Parameter
+properties are assigned right after `super()`, so the class-name assignment overwrites the parameter
+— the `name` argument is silently discarded and any caller reading `err.name` gets
+`'LinkTargetError'`, never the package name. Either drop the parameter property (the package name is
+already embedded in `message`), or rename the field (e.g. `pkgName`) so it is not clobbered.
+
+
+
+─── src/commands/link.ts:293-293 ───
+[style · low] Nested ternary (the else-branch contains a second `? :`). The project rules forbid
+nested ternaries; please expand into an explicit `if/else` or a small helper for readability.
+
+
+
+─── src/commands/link.ts:103-103 ───
+[bug · low] Lookup by arbitrary user input on a plain object hits `Object.prototype`. For e.g. `lpm
+link constructor` / `lpm link toString` / `lpm link __proto__`, `cfg.libs[raw]` returns an inherited
+member (not `undefined`), so the code takes the "registered" branch and reports the misleading
+`注册值损坏：libs["constructor"] 应为字符串相对路径` instead of the "未知注册名/路径" message. Use an own-property check
+(e.g. `Object.hasOwn(cfg?.libs ?? {}, raw) ? cfg.libs[raw] : undefined`).
+
+
+
+─── src/core/install.ts:37-37 ───
+[bug · critical] `PackageManagerId` 是逻辑标识（`'yarn-classic'` / `'yarn-berry'`），不是可执行文件名，直接把它当命令传给
+execa 会让 yarn 项目恒定失败：不存在 `yarn-classic` / `yarn-berry` 可执行文件，会以 ENOENT 抛出（install 报
+InstallError、watch 每次打印「拉起失败」）。`spawnBuildWatch`（第 72 行 `execa(pm, ['run', 'build:watch'],
+...)`）同一问题，且 `${pm} ${args.join(' ')}` 生成的 `command` 展示串（InstallError.command）按「可直接重跑」的定位也不可执行。建议加一个
+id→可执行名映射（pnpm→`pnpm`、npm→`npm`、yarn-classic/yarn-berry→`yarn`），两处 execa 调用与 command 展示统一使用。
+
+-     await execa(pm, args, { cwd: rootDir, stdio: ['inherit', 'inherit', 'pipe'] })
++     await execa(PM_BINARY[pm], args, { cwd: rootDir, stdio: ['inherit', 'inherit', 'pipe'] })
+
+
+─── src/core/linkcheck.ts:112-112 ───
+[style · low] 本项目（含本 PR 新增代码）一律使用严格相等，`==` / `!=` 属编码规约禁止项；此处 `!= null` 依赖隐式类型转换。`expectedName` 类型为
+`string | null | undefined`，改为显式类型判定即可，语义等价且更清晰。
+
+-   if (opts.expectedName != null && opts.expectedName !== '' && name !== '' && name !== opts.expectedName) {
++   if (typeof opts.expectedName === 'string' && opts.expectedName !== '' && name !== '' && name !== opts.expectedName) {
+
+
+─── src/core/linkcheck.ts:60-63 ───
+[maintainability · low] `fromCondition` 当前只有一处调用点（第 79 行 `dot !== null && typeof dot === 'object' &&
+!Array.isArray(dot)` 分支），调用前已保证参数是非 null、非数组的对象，因此这里 `typeof v === 'string'` 的分支永远不会执行，属死代码。若本意是兼容
+Node 的顶层条件式 exports 简写（`"exports": { "import": ... }`，无 `'.'` 键，此时 `obj['.']` 为 undefined 会直接跳过
+exports 检查），应在第 75 行分支里对 `value` 本身调用 `fromCondition(value)`，而不是保留这条不可达分支。
+
+

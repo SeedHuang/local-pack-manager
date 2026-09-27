@@ -22,3 +22,17 @@ export function writeJsonFileAtomic(filePath: string, value: unknown): void {
     throw err
   }
 }
+
+/** 文本级原子写（S6 spec §4.3）：writeJsonFileAtomic 同款 tmp 命名（pid + uuid）+ rename；
+ *  content 逐字节 utf8 落盘——无 BOM/换行/转义转换（package.json 格式保真由 S5 引擎产出保证）。
+ *  失败语义：写入/rename 失败 → 清理孤儿 tmp 后原错误重抛。 */
+export function writeTextFileAtomic(filePath: string, content: string): void {
+  const tmp = `${filePath}.${process.pid}.${randomUUID()}.tmp`
+  try {
+    writeFileSync(tmp, content, 'utf8')
+    renameSync(tmp, filePath) // Node 在 Windows 对已存在目标可覆盖（REPLACE_EXISTING 语义）；目标为目录时抛错
+  } catch (err) {
+    rmSync(tmp, { force: true })
+    throw err
+  }
+}
