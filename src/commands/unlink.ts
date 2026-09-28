@@ -1,4 +1,5 @@
-import { existsSync, lstatSync, readFileSync, realpathSync, statSync } from 'node:fs'
+import { existsSync, readFileSync, realpathSync, statSync } from 'node:fs'
+import { probeNodeModules, type NmProbe } from '../core/nmcheck.js'
 import { dirname, isAbsolute, join, relative } from 'node:path'
 import * as clack from '@clack/prompts'
 import { LibCheckError } from '../core/linkcheck.js'
@@ -9,7 +10,7 @@ import {
   runForceInstall,
   runInstall,
 } from '../core/install.js'
-import { PMAmbiguousError, PMUnresolvedError, resolvePackageManager } from '../core/pm.js'
+import { PMAmbiguousError, PMUnresolvedError, resolvePackageManager, type PackageManagerId } from '../core/pm.js'
 import { LOCAL_PROTOCOL_RE, readDepValues, restoreDepValue, type RewriteResult } from '../core/rewriter.js'
 import {
   ManifestParseError,
@@ -22,14 +23,17 @@ import { writeTextFileAtomic } from '../state/atomic.js'
 import {
   LpmConfigParseError,
   LpmStateParseError,
+  buildRunTrace,
   deleteState,
   readProjectConfig,
   readState,
   writeLast,
+  writeRunTrace,
   writeState,
 } from '../state/index.js'
-import type { LinkState, ProjectLpmConfig } from '../state/types.js'
+import type { LastRunTrace, LinkState, ProjectLpmConfig } from '../state/types.js'
 import { LinkArgumentError, LinkCancelledError, LinkInteractionError, resolveMonorepo, resolveTarget } from './link.js'
+import { traceFailure } from './run-trace.js'
 
 // unlink 直通版编排（S7 spec §4.4）。行为权威 = spec；崩溃安全顺序（PRD §9 行 306）：
 // 先恢复文件 → install → 复验/--force → 才删 state（last 先写后删——评审 P1-1）。
@@ -50,7 +54,8 @@ function toRel(rootDir: string, abs: string): string {
   return relative(rootDir, abs).replaceAll('\\', '/')
 }
 
-const ESCAPE_HATCH = '若需彻底重来：① git checkout -- <受影响>/package.json ② 删除 .lpm/ ③ 在 workspace 根重跑一次 install——lpm 状态可抛弃重建'
+/** 手工逃生三步文案（S8 §4.3：扩为导出供 repair 复用同一份字符串——零文案改动） */
+export const ESCAPE_HATCH = '若需彻底重来：① git checkout -- <受影响>/package.json ② 删除 .lpm/ ③ 在 workspace 根重跑一次 install——lpm 状态可抛弃重建'
 
 /** unlink 向 install 失败建议（裁决 7：重跑语义与 link 相反且真实有效——PRD §6.2 行 143） */
 const UNLINK_RETRY_ADVICE = `state 已保留（文件已恢复），可直接重跑 lpm unlink——恢复段幂等跳过直达 install；${ESCAPE_HATCH}`
@@ -70,8 +75,9 @@ function reportError(err: unknown): number {
   throw err
 }
 
-/** C 条目校验（裁决 5）：original 为对象、非空、键值全非空 string；损坏 → LinkStateCorruptError */
-function validateEntry(key: string, entry: LinkState['links'][string] | undefined): Record<string, string> {
+/** C 条目校验（裁决 5）：original 为对象、非空、键值全非空 string；损坏 → LinkStateCorruptError
+ *  （S8 §4.3：扩为导出，供 status/repair 复用条目结构校验；定义与行为零变化） */
+export function validateEntry(key: string, entry: LinkState['links'][string] | undefined): Record<string, string> {
   if (entry === undefined) {
     throw new LinkStateCorruptError(key, `state 条目损坏：${key} 的 original 缺失。手工逃生三步：${ESCAPE_HATCH}`)
   }
@@ -94,7 +100,7 @@ function validateEntry(key: string, entry: LinkState['links'][string] | undefine
 
 interface VerifyFinding { rel: string; nmRel: string; status: 'ok' | 'missing' | 'residue'; note?: string }
 
-/** F 复验（realpath 比对——兼容 symlink 与 junction，PRD 行 328；悬空/库删/注册缺全部 try/catch 兜底） */
+/** F 复验（判定走 nmcheck.probeNodeModules；本节只做「事实 → unlink 侧语义」解释，文案逐字不变） */
 function verifyResidue(rootDir: string, cfg: ProjectLpmConfig | null, key: string, manifestPaths: string[]): VerifyFinding[] {
   const out: VerifyFinding[] = []
   const registered = cfg?.libs[key]
@@ -104,29 +110,22 @@ function verifyResidue(rootDir: string, cfg: ProjectLpmConfig | null, key: strin
     try { libReal = realpathSync(libDirAbs) } catch { libReal = null }
   }
   for (const mp of manifestPaths) {
-    const nmEntry = join(dirname(mp), 'node_modules', key)
     const nmRel = `${toRel(rootDir, dirname(mp))}/node_modules/${key}`
-    if (!existsSync(nmEntry)) {
-      // existsSync 跟随链接：false = 不存在或悬空——lstat 不跟随，成功即悬空链接
-      let dangling = false
-      try { lstatSync(nmEntry); dangling = true } catch { dangling = false }
-      out.push({ rel: toRel(rootDir, mp), nmRel, status: dangling ? 'residue' : 'missing', note: dangling ? '悬空链接' : undefined })
-      continue
-    }
-    let real: string
-    try { real = realpathSync(nmEntry) } catch {
-      out.push({ rel: toRel(rootDir, mp), nmRel, status: 'residue', note: '悬空链接' })
-      continue
-    }
-    if (libReal !== null && real === libReal) {
+    const probe: NmProbe = probeNodeModules(mp, key, libReal)
+    if (probe.status === 'link-to-lib') {
       out.push({ rel: toRel(rootDir, mp), nmRel, status: 'residue', note: '软链残留' })
       continue
     }
-    if (libReal === null) {
-      out.push({ rel: toRel(rootDir, mp), nmRel, status: 'ok', note: '注册缺失/库已删，无法比对指向' })
+    if (probe.status === 'dangling') {
+      out.push({ rel: toRel(rootDir, mp), nmRel, status: 'residue', note: '悬空链接' })
       continue
     }
-    out.push({ rel: toRel(rootDir, mp), nmRel, status: 'ok' })
+    if (probe.status === 'missing') {
+      out.push({ rel: toRel(rootDir, mp), nmRel, status: 'missing' })
+      continue
+    }
+    // entity / link-elsewhere → ok（无 note）；unknown → ok + 注明
+    out.push({ rel: toRel(rootDir, mp), nmRel, status: 'ok', note: probe.note })
   }
   return out
 }
@@ -137,6 +136,12 @@ export async function runUnlink(targets: readonly string[], opts: UnlinkOptions,
     process.stdout.write('交互模式随 S9 上线；直通用法：lpm unlink <名字|路径>... [--all] [--dry-run]\n')
     return 1
   }
+  // 运行留痕所需上下文（失败路径在 catch 中也要能定位 rootDir/pm）——S8 spec §4.6
+  let traceRoot: string | null = null
+  let tracePm: PackageManagerId | null = null
+  // S8 运行留痕（spec §4.6）：本次**已落盘**的改动与子进程——成功/失败路径共用（失败时记已发生部分）
+  const traceChanges: LastRunTrace['changes'] = []
+  const traceInstalls: LastRunTrace['installs'] = []
   try {
     // A2 互斥（spec §5 #3）
     if (opts.all === true && targets.length > 0) {
@@ -148,6 +153,8 @@ export async function runUnlink(targets: readonly string[], opts: UnlinkOptions,
     const cfg: ProjectLpmConfig | null = await readProjectConfig(rootDir)
     const pmResolution = await resolvePackageManager(rootDir, cfg?.packageManager)
     const pm = pmResolution.pm
+    traceRoot = rootDir
+    tracePm = pm
     if (pmResolution.source === 'detected') {
       process.stdout.write(`检测到包管理器：${pm}（未 lpm use 固化）\n`)
     }
@@ -204,6 +211,8 @@ export async function runUnlink(targets: readonly string[], opts: UnlinkOptions,
     let restoredKeyCount = 0               // 有恢复动作的 key 数（O4 镜像 N）
 
     for (const key of requested) {
+      const idemMark = planIdempotent.length
+      const missingMark = planMissing.length
       // OCR：own-property 守卫——防 'constructor'/'toString' 等原型链成员被当作已存在条目
       // （与上方 Object.hasOwn(cfg.libs, raw) 惯例一致）
       const entry = st?.links !== undefined && Object.hasOwn(st.links, key) ? st.links[key] : undefined
@@ -305,6 +314,8 @@ export async function runUnlink(targets: readonly string[], opts: UnlinkOptions,
           restoredTotal += v.changedCount
         }
         totalChanged = restoredTotal
+        planIdempotent.length = idemMark   // O4：放弃 = 该 lib 零改写 → 计数同步回滚
+        planMissing.length = missingMark
         continue
       }
       if (allMissing) continue // 全文件缺失 → 条目保留（自决 5），不进待删集
@@ -347,11 +358,17 @@ export async function runUnlink(targets: readonly string[], opts: UnlinkOptions,
     for (const [mp, agg] of aggregated) {
       if (agg.changedCount === 0) continue
       writeTextFileAtomic(mp, agg.content)
+      traceChanges.push({
+        target: toRel(rootDir, mp),
+        action: 'rewrite-manifest',
+        detail: agg.hits.map((h) => `${h.section}.${h.pkgName}：${h.fromValue} → ${h.original}`).join('；'),
+      })
     }
 
     // E2 install 恰一次（待删集非空——恢复/幂等跳过/用当前 三类覆盖）
     if (pendingDelete.length > 0) {
       await runInstall(rootDir, pm, UNLINK_RETRY_ADVICE)
+      traceInstalls.push({ command: buildInstallCommandLine(pm), ok: true, exitCode: 0 })
     }
 
     // F 复验 + --force（恰一次重建 + 恰一次复验；--force 在删 state 之前）
@@ -366,6 +383,7 @@ export async function runUnlink(targets: readonly string[], opts: UnlinkOptions,
           process.stdout.write(`警告：node_modules ${f.status === 'residue' ? `残留（${f.note ?? '软链残留'}）` : '缺失'}：${f.nmRel}——${buildForceInstallCommandLine(pm)} 重建\n`)
         }
         await runForceInstall(rootDir, pm, UNLINK_RETRY_ADVICE)
+        traceInstalls.push({ command: buildForceInstallCommandLine(pm), ok: true, exitCode: 0 })
         const recheck: VerifyFinding[] = []
         for (const [key, mps] of verifyManifests) {
           recheck.push(...verifyResidue(rootDir, cfg, key, mps))
@@ -393,8 +411,18 @@ export async function runUnlink(targets: readonly string[], opts: UnlinkOptions,
     if (Object.keys(remaining).length === 0 && pendingDelete.length > 0) {
       await writeLast(rootDir, { version: 1, names: beforeKeys }) // 清空前完整集合
       await deleteState(rootDir)
+      traceChanges.push({
+        target: '.lpm/state.json',
+        action: 'delete-entry',
+        detail: `删除整个档案文件（清空前条目：${beforeKeys.join('、')}；原值：${JSON.stringify(Object.fromEntries(beforeKeys.map((k) => [k, st?.links[k]?.original ?? {}])))}）`,
+      })
     } else if (pendingDelete.length > 0) {
       await writeState(rootDir, { version: 1, links: remaining })
+      traceChanges.push({
+        target: '.lpm/state.json',
+        action: 'write-state',
+        detail: `删除档案条目：${pendingDelete.join('、')}（剩余 ${Object.keys(remaining).length} 条；原值：${JSON.stringify(Object.fromEntries(pendingDelete.map((k) => [k, st?.links[k]?.original ?? {}])))}）`,
+      })
     }
 
     // I/J 完成提示（O4 镜像 + PRD 行 145）
@@ -409,8 +437,24 @@ export async function runUnlink(targets: readonly string[], opts: UnlinkOptions,
     const skippedTotal = planSkipped.length + planAbandoned.length + dedupSkipped + planIdempotent.length
     if (skippedTotal > 0) process.stdout.write(`  跳过合计：${skippedTotal} 处\n`)
     process.stdout.write('以上 package.json 已恢复原 range（多数场景与 git 基线一致；冲突选「用当前」的文件保留手动改动）；建议重启 dev server 使依赖变更生效。\n')
+    // S8 运行留痕（spec §4.6）：仅当本次确有改动（pendingDelete 非空）时写，避免零动作空跑凭空建 .lpm/
+    if (pendingDelete.length > 0) {
+      await writeRunTrace(rootDir, buildRunTrace({
+        command: 'unlink',
+        rootDir,
+        packageManager: pm,
+        changes: traceChanges,
+        installs: traceInstalls,
+        failure: null,
+      }))
+    }
     return 0
   } catch (err) {
+    // S8 运行留痕（spec §4.6）：失败路径在 reportError 之前捕获原始证据
+    // 闸门：--dry-run 零写盘契约优先（不跑子进程、无值得留的证据）——S8 评审 ① 裁定
+    if (opts.dryRun !== true && traceRoot !== null && tracePm !== null) {
+      await traceFailure('unlink', traceRoot, tracePm, traceChanges, traceInstalls, err)
+    }
     if (err instanceof LinkCancelledError) {
       process.stderr.write('已取消\n')
       return 1

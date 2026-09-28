@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { homedir } from 'node:os'
-import type { LastSet, LinkState, ProjectLpmConfig, UserLpmConfig } from './types.js'
+import type { LastRunTrace, LastSet, LinkState, ProjectLpmConfig, UserLpmConfig } from './types.js'
 import { writeJsonFileAtomic } from './atomic.js'
 
 /** lpm.config.json 不是合法 JSON/结构无效（S3 引入；深层最小校验由 S4 补——S4 spec §4.4 规约 5–7） */
@@ -206,4 +206,48 @@ export async function ensureGitignoreEntry(rootDir: string): Promise<'present' |
   }
   writeFileSync(p, '.lpm/\n', 'utf8')
   return 'added'
+}
+
+function lastRunPathOf(rootDir: string): string {
+  return join(rootDir, '.lpm', 'last-run.json')
+}
+
+/** 运行留痕（S8 spec §4.6）：原子写；与 state 同级做 gitignore 防护（repair 可能在 .lpm/ 尚不存在时写）；
+ *  只留最近一次（新写覆盖旧写）。**内建吞异常**——留痕失败绝不影响主流程（spec §4.6：异常一律吞掉 + stderr 一行提示）。 */
+export async function writeRunTrace(rootDir: string, trace: LastRunTrace): Promise<void> {
+  try {
+    await ensureGitignoreEntry(rootDir)
+    const p = lastRunPathOf(rootDir)
+    ensureParentDir(p)
+    writeJsonFileAtomic(p, trace)
+  } catch {
+    process.stderr.write('警告：运行留痕写入失败（不影响本次结果）\n')
+  }
+}
+
+/** 运行留痕构造工厂（S8 最终评审 Important ④ 裁定）：link/unlink/repair 三命令共用，
+ *  收敛成功/失败两态的同构装配，消除逐字重复的构造块。
+ *  - `result` 由 `failure` 是否为 null 决定（null → 'ok'，否则 'failed'）
+ *  - 分层约束：**不 import `core/install.js`**；失败字段（command/exitCode/stderrTail）由调用方
+ *    从 `InstallError` 提取后传入，state 层只做纯装配
+ *  - 只装配对象、不落盘（落盘仍由 `writeRunTrace` 负责，其自身已内建吞异常） */
+export function buildRunTrace(input: {
+  command: LastRunTrace['command']
+  rootDir: string
+  packageManager: LastRunTrace['packageManager']
+  changes: LastRunTrace['changes']
+  installs: LastRunTrace['installs']
+  failure: LastRunTrace['failure']
+}): LastRunTrace {
+  return {
+    version: 1,
+    command: input.command,
+    at: new Date().toISOString(),
+    rootDir: input.rootDir,
+    packageManager: input.packageManager,
+    result: input.failure === null ? 'ok' : 'failed',
+    changes: input.changes,
+    installs: input.installs,
+    failure: input.failure,
+  }
 }

@@ -348,6 +348,17 @@ describe('lstat 复验 + --force（裁决 1）', () => {
       outSpy.mockRestore()
     }
   })
+  it('UNL-31：悬空链接 → 复验报「悬空链接」→ force 恰一次', async () => {
+    const ws = makeWs({}, STATE_ONE)
+    rmSync(join(ws, 'apps/web/node_modules/@t/lib'), { recursive: true, force: true })
+    mkdirSync(join(ws, 'apps/web/node_modules'), { recursive: true })
+    symlinkSync(join(ws, 'lpm-lib'), join(ws, 'apps/web/node_modules/@t/lib'), 'junction')
+    rmSync(join(ws, 'lpm-lib'), { recursive: true, force: true }) // 目标删除 → 悬空
+    vi.mocked(execa).mockResolvedValue({ exitCode: 0 } as never)
+    const r = await runUnlink(['@t/lib'], {}, ws)
+    expect(r).toBe(0)
+    expect(execa).toHaveBeenCalledTimes(2) // install + --force
+  })
 })
 
 describe('完成提示（J/I）', () => {
@@ -415,5 +426,64 @@ describe('OCR 修复回归（S7 评审轮）', () => {
     } finally {
       err.mockRestore()
     }
+  })
+})
+
+describe('S8 运行留痕 + O4 计数回滚（unlink）', () => {
+  it('STR-U1：放弃时 planIdempotent 回滚——「跳过合计」不虚增', async () => {
+    const ws = makeWs(
+      {
+        'apps/web/package.json': JSON.stringify({ name: 'web', dependencies: { '@t/lib': '^1.0.0' } }), // 幂等跳过（值 == original）
+        'apps/other/package.json': JSON.stringify({ name: 'other', dependencies: { '@t/lib': '^2.0.0' } }), // 冲突 → isCancel → 放弃
+      },
+      { version: 1, links: {
+        '@t/lib': { original: { 'apps/web/package.json': '^1.0.0', 'apps/other/package.json': '^1.0.0' }, linkedAt: '2026-01-01T00:00:00.000Z' },
+      } },
+    )
+    stubTty(true)
+    vi.mocked(select).mockResolvedValue('current')
+    vi.mocked(isCancel).mockReturnValue(true)
+    const out = vi.spyOn(process.stdout, 'write').mockImplementation(() => true)
+    try {
+      const r = await runUnlink(['@t/lib'], {}, ws)
+      expect(r).toBe(0)
+      const text = out.mock.calls.map((c) => String(c[0])).join('')
+      // 回滚前 planIdempotent 会多计 web 的 1 处 → 跳过合计 2；回滚后仅放弃的 key → 1
+      expect(text).toContain('跳过合计：1 处')
+      expect(text).not.toContain('跳过合计：2 处')
+    } finally {
+      out.mockRestore()
+    }
+  })
+  it('STR-U2：unlink 成功 → last-run.json 存在且 command=unlink/result=ok/含 delete-entry', async () => {
+    const ws = makeWs({}, STATE_ONE)
+    vi.mocked(execa).mockResolvedValue({ exitCode: 0 } as never)
+    expect(await runUnlink(['@t/lib'], {}, ws)).toBe(0)
+    const trace = JSON.parse(readFileSync(join(ws, '.lpm', 'last-run.json'), 'utf8'))
+    expect(trace.command).toBe('unlink')
+    expect(trace.result).toBe('ok')
+    expect(trace.failure).toBeNull()
+    expect(trace.changes.some((c: { action: string }) => c.action === 'delete-entry')).toBe(true)
+  })
+  it('STR-U3：install 失败 → result=failed 且 failure.stderrTail 为原始 stderr 末尾', async () => {
+    const ws = makeWs({}, STATE_ONE)
+    vi.mocked(execa).mockRejectedValue({ exitCode: 1, stderr: 'boom-tail' })
+    expect(await runUnlink(['@t/lib'], {}, ws)).toBe(1)
+    const trace = JSON.parse(readFileSync(join(ws, '.lpm', 'last-run.json'), 'utf8'))
+    expect(trace.command).toBe('unlink')
+    expect(trace.result).toBe('failed')
+    expect(trace.failure.exitCode).toBe(1)
+    expect(trace.failure.stderrTail).toContain('boom-tail')
+    // 评审 ②：失败时也须记下「已发生的改动」（声明已恢复）与失败的那次子进程；档案未动
+    expect(trace.changes.some((c: { action: string }) => c.action === 'rewrite-manifest')).toBe(true)
+    expect(trace.changes.some((c: { action: string }) => c.action === 'write-state' || c.action === 'delete-entry')).toBe(false)
+    expect(trace.installs).toHaveLength(1)
+    expect(trace.installs[0]).toMatchObject({ ok: false, exitCode: 1 })
+  })
+  it('STR-U4：--dry-run 失败路径零写盘——不存在路径 exit 1 且不建 .lpm/（评审 ①）', async () => {
+    const ws = makeWs()
+    const r = await runUnlink([join(ws, 'no-such-dir')], { dryRun: true }, ws)
+    expect(r).toBe(1)
+    expect(existsSync(join(ws, '.lpm'))).toBe(false)
   })
 })

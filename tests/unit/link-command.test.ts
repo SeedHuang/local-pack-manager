@@ -570,3 +570,44 @@ describe('S6 留观补测（N-7/M-4）', () => {
     out.clear()
   })
 })
+
+describe('S8 运行留痕（link）', () => {
+  it('STR-L1：link 成功 → .lpm/last-run.json 存在且 command=link/result=ok', async () => {
+    const ws = makeWs()
+    const lib = makeLib()
+    expect(await runLink([lib], {}, ws)).toBe(0)
+    const trace = JSON.parse(readFileSync(join(ws, '.lpm', 'last-run.json'), 'utf8'))
+    expect(trace.command).toBe('link')
+    expect(trace.result).toBe('ok')
+    expect(trace.failure).toBeNull()
+    expect(trace.installs).toHaveLength(1)
+    expect(trace.changes.some((c: { action: string }) => c.action === 'rewrite-manifest')).toBe(true)
+  })
+  it('STR-L2：install 抛错 → result=failed 且 failure.exitCode 有值、stderrTail 为原始 stderr', async () => {
+    const ws = makeWs()
+    const lib = makeLib()
+    vi.mocked(execa).mockImplementation((async (cmd: unknown) => {
+      if (cmd !== 'git') throw { exitCode: 1, stderr: 'ERR_PNPM' }
+      return { stdout: '' } as never
+    }) as never)
+    expect(await runLink([lib], {}, ws)).toBe(1)
+    const trace = JSON.parse(readFileSync(join(ws, '.lpm', 'last-run.json'), 'utf8'))
+    expect(trace.command).toBe('link')
+    expect(trace.result).toBe('failed')
+    expect(trace.failure.exitCode).toBe(1)
+    expect(trace.failure.stderrTail).toContain('ERR_PNPM')
+    // 评审 ②：失败时也须记下「已发生的改动」与失败的那次子进程
+    expect(trace.changes.some((c: { action: string }) => c.action === 'write-state')).toBe(true)
+    expect(trace.changes.some((c: { action: string }) => c.action === 'rewrite-manifest')).toBe(true)
+    expect(trace.installs).toHaveLength(1)
+    expect(trace.installs[0]).toMatchObject({ ok: false, exitCode: 1 })
+  })
+  it('STR-L3：--dry-run 失败路径零写盘——不存在路径 exit 1 且不建 .lpm/ 与 .gitignore（评审 ①）', async () => {
+    const ws = makeWs()
+    const cap = captureOut()
+    expect(await runLink([join(ws, 'no-such-dir')], { dryRun: true }, ws)).toBe(1)
+    expect(cap.stderr()).toContain('未知注册名/路径不存在')
+    expect(existsSync(join(ws, '.lpm'))).toBe(false)
+    expect(existsSync(join(ws, '.gitignore'))).toBe(false)
+  })
+})

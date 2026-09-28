@@ -11,9 +11,11 @@ import {
   readState,
   readUserConfig,
   writeLast,
+  writeRunTrace,
   writeState,
   writeUserConfig,
 } from '../../src/state/index.js'
+import type { LastRunTrace } from '../../src/state/types.js'
 
 // homedir 隔离（spec §7.1）：默认透传真实现，osMock.home 非空时替换（F10：plan 期红灯即验；失效则改 USERPROFILE 注入）
 const osMock = vi.hoisted(() => ({ home: '' }))
@@ -317,5 +319,43 @@ describe('writeTextFileAtomic（S6 spec §4.3）', () => {
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
+  })
+})
+
+describe('writeRunTrace（S8 运行留痕）', () => {
+  it('STR-T1：写入 .lpm/last-run.json，内容与入参一致', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'lpm-rt-'))
+    dirs.push(dir)
+    const trace: LastRunTrace = {
+      version: 1, command: 'repair', at: '2026-09-28T10:00:00.000Z', rootDir: dir,
+      packageManager: 'pnpm', result: 'failed',
+      changes: [{ target: 'apps/web/package.json', action: 'rewrite-manifest', detail: '@t/lib：^1.0.0 → link:../lpm-lib' }],
+      installs: [{ command: 'pnpm install --no-frozen-lockfile', ok: false, exitCode: 1 }],
+      failure: { command: 'pnpm install --no-frozen-lockfile', exitCode: 1, stderrTail: 'ERR_PNPM', message: 'install 失败' },
+    }
+    await writeRunTrace(dir, trace)
+    const raw = JSON.parse(readFileSync(join(dir, '.lpm', 'last-run.json'), 'utf8'))
+    expect(raw).toEqual(trace)
+  })
+  it('STR-T2：新一次覆盖旧一次（只留最近一次）', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'lpm-rt-'))
+    dirs.push(dir)
+    const mk = (cmd: 'link' | 'repair'): LastRunTrace => ({
+      version: 1, command: cmd, at: 'x', rootDir: dir, packageManager: 'pnpm', result: 'ok',
+      changes: [], installs: [], failure: null,
+    })
+    await writeRunTrace(dir, mk('link'))
+    await writeRunTrace(dir, mk('repair'))
+    expect(JSON.parse(readFileSync(join(dir, '.lpm', 'last-run.json'), 'utf8')).command).toBe('repair')
+  })
+  it('STR-T3：.lpm/ 不存在时自动创建，且写入 .gitignore 防护', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'lpm-rt-'))
+    dirs.push(dir)
+    await writeRunTrace(dir, {
+      version: 1, command: 'link', at: 'x', rootDir: dir, packageManager: 'pnpm', result: 'ok',
+      changes: [], installs: [], failure: null,
+    })
+    expect(existsSync(join(dir, '.lpm', 'last-run.json'))).toBe(true)
+    expect(readFileSync(join(dir, '.gitignore'), 'utf8')).toContain('.lpm')
   })
 })

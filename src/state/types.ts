@@ -22,3 +22,19 @@ export interface LastSet { version: 1; names: string[] }
 
 /** 用户级 ~/.lpm/config.json —— PRD §9.4 */
 export interface UserLpmConfig { version: 1; scanDirs: string[] }   // 绝对路径
+
+/** 项目级 .lpm/last-run.json（gitignore）—— S8 运行留痕：只留最近一次 */
+export interface LastRunTrace {
+  version: 1
+  command: 'link' | 'unlink' | 'repair'
+  at: string                    // ISO 8601
+  rootDir: string
+  packageManager: PackageManagerId
+  result: 'ok' | 'failed'
+  /** target = 被改动对象：manifest 相对路径（文件动作）或 lib 名 / '.lpm/state.json'（档案动作）
+   *  action：rewrite-manifest=改写声明；upsert-registration=注册 upsert（lpm.config.json）；
+   *          write-state=写档案 state.json（部分改动）；delete-entry=删档案条目/整文件删除（detail 写明） */
+  changes: Array<{ target: string; action: 'rewrite-manifest' | 'write-state' | 'delete-entry' | 'upsert-registration'; detail: string }>
+  installs: Array<{ command: string; ok: boolean; exitCode: number | null }>
+  failure: { command: string; exitCode: number | null; stderrTail: string; message: string } | null
+}

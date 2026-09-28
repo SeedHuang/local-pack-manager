@@ -5,6 +5,8 @@ import { COMMANDS } from './commands/registry.js'
 import { notImplemented } from './commands/stub.js'
 import { runLink } from './commands/link.js'
 import { runUnlink } from './commands/unlink.js'
+import { runStatus } from './commands/status.js'
+import { runRepair } from './commands/repair.js'
 import { runUse } from './commands/use.js'
 import { LPM_VERSION } from './version.js'
 
@@ -47,6 +49,30 @@ export function buildProgram(): Command {
         .option('--dry-run', '仅打印执行计划，不落盘不执行')
         .action(async (targets: string[], options: { all?: boolean; dryRun?: boolean }) => {
           process.exitCode = await runUnlink(targets, options)
+        })
+      continue
+    }
+    // S8：status 只读诊断接线（description 不带计划后缀）
+    if (meta.name === 'status') {
+      program
+        .command(meta.name)
+        .description(meta.summary)
+        .option('--json', '输出结构化 JSON（供脚本与 E2E 消费）')
+        .allowExcessArguments(false)
+        .action(async (options: { json?: boolean }) => {
+          process.exitCode = await runStatus(options)
+        })
+      continue
+    }
+    // S8：repair 六族自修复接线（description 不带计划后缀；不接受位置参数）
+    if (meta.name === 'repair') {
+      program
+        .command(meta.name)
+        .description(meta.summary)
+        .option('--dry-run', '仅打印修复计划，不落盘不执行')
+        .allowExcessArguments(false)
+        .action(async (options: { dryRun?: boolean }) => {
+          process.exitCode = await runRepair(options)
         })
       continue
     }

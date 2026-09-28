@@ -4,7 +4,7 @@ import * as clack from '@clack/prompts'
 import { execa } from 'execa'
 import { LibCheckError, checkLib } from '../core/linkcheck.js'
 import { InstallError, buildInstallCommandLine, detectLibPM, pmExecutable, runInstall, spawnBuildWatch, type WatchProcess } from '../core/install.js'
-import { PMAmbiguousError, PMUnresolvedError, resolvePackageManager } from '../core/pm.js'
+import { PMAmbiguousError, PMUnresolvedError, resolvePackageManager, type PackageManagerId } from '../core/pm.js'
 import { LOCAL_PROTOCOL_RE, ProtocolPathError, findDepEntries, mapProtocol, rewriteDepValue, type RewriteResult } from '../core/rewriter.js'
 import {
   ManifestParseError,
@@ -21,14 +21,17 @@ import {
 import {
   LpmConfigParseError,
   LpmStateParseError,
+  buildRunTrace,
   readProjectConfig,
   readState,
   writeLast,
   writeProjectConfig,
+  writeRunTrace,
   writeState,
 } from '../state/index.js'
 import { writeTextFileAtomic } from '../state/atomic.js'
-import type { LinkState, ProjectLpmConfig } from '../state/types.js'
+import type { LastRunTrace, LinkState, ProjectLpmConfig } from '../state/types.js'
+import { traceFailure } from './run-trace.js'
 
 export interface LinkOptions { watch?: boolean; dryRun?: boolean }
 
@@ -153,9 +156,9 @@ async function pickMember(libDirAbs: string, members: PackageJsonInfo[]): Promis
   return { libDirAbs: dir, name: member?.name ?? '' }
 }
 
-const ABANDON = Symbol('abandon')
+export const ABANDON: unique symbol = Symbol('abandon')
 
-async function ternaryOriginal(
+export async function ternaryOriginal(
   rootDir: string,
   key: string,
   pkgName: string,
@@ -245,6 +248,12 @@ export async function runLink(targets: readonly string[], opts: LinkOptions, cwd
     process.stdout.write('交互模式随 S9 上线；直通用法：lpm link <名字|路径>... [--watch] [--dry-run]\n')
     return 1
   }
+  // 运行留痕所需上下文（失败路径在 catch 中也要能定位 rootDir/pm）——S8 spec §4.6
+  let traceRoot: string | null = null
+  let tracePm: PackageManagerId | null = null
+  // S8 运行留痕（spec §4.6）：本次**已落盘**的改动与子进程——成功/失败路径共用（失败时记已发生部分）
+  const traceChanges: LastRunTrace['changes'] = []
+  const traceInstalls: LastRunTrace['installs'] = []
   try {
     // A5 workspace
     const rootDir = await findWorkspaceRoot(cwd)
@@ -253,6 +262,8 @@ export async function runLink(targets: readonly string[], opts: LinkOptions, cwd
     // A4 PM
     const pmResolution = await resolvePackageManager(rootDir, cfg?.packageManager)
     const pm = pmResolution.pm
+    traceRoot = rootDir
+    tracePm = pm
     if (pmResolution.source === 'detected') {
       process.stdout.write(`检测到包管理器：${pm}（未 lpm use 固化）\n`)
     }
@@ -317,6 +328,7 @@ export async function runLink(targets: readonly string[], opts: LinkOptions, cwd
         next.libs[key] = relPath
         await writeProjectConfig(rootDir, next)
         cfg = next
+        traceChanges.push({ target: key, action: 'upsert-registration', detail: `${key} → ${relPath}` })
       }
       planUpserts.push({ key, rel: relPath, isNew })
 
@@ -429,14 +441,23 @@ export async function runLink(targets: readonly string[], opts: LinkOptions, cwd
       newLinks[p.key] = { original: p.original, linkedAt: new Date().toISOString() }
     }
     await writeState(rootDir, { version: 1, links: newLinks })
+    traceChanges.push({ target: '.lpm/state.json', action: 'write-state', detail: `写入 ${pendingLinks.length} 个链接条目：${pendingLinks.map((p) => p.key).join('、')}` })
 
     // E6b package.json（文本级原子写）
     for (const [mp, entry] of aggregated) {
       writeTextFileAtomic(mp, entry.content)
+      if (entry.changedCount > 0) {
+        traceChanges.push({
+          target: toRel(rootDir, mp),
+          action: 'rewrite-manifest',
+          detail: entry.hits.map((h) => `${h.section}.${h.pkgName}：${h.fromValue} → ${h.targetValue}`).join('；'),
+        })
+      }
     }
 
     // E6c 单次 install
     await runInstall(rootDir, pm)
+    traceInstalls.push({ command: buildInstallCommandLine(pm), ok: true, exitCode: 0 })
 
     // I last（targets ≥ 2 且至少成功 1 个）
     if (targets.length >= 2 && linkedTargets.length >= 1) {
@@ -488,8 +509,22 @@ export async function runLink(targets: readonly string[], opts: LinkOptions, cwd
     if (skippedTotal > 0) process.stdout.write(`  已链接跳过：${skippedTotal} 处\n`)
     for (const p of peerWarn) process.stdout.write(`  警告：peerDependencies 命中不改写：${p.rel}（${p.pkg}）\n`)
     process.stdout.write('以上 package.json 已修改，请勿提交；lpm unlink 可恢复原状。\n')
+    // S8 运行留痕（spec §4.6）：记本次写盘动作与子进程结果（writeRunTrace 内建吞异常）
+    await writeRunTrace(rootDir, buildRunTrace({
+      command: 'link',
+      rootDir,
+      packageManager: pm,
+      changes: traceChanges,
+      installs: traceInstalls,
+      failure: null,
+    }))
     return 0
   } catch (err) {
+    // S8 运行留痕（spec §4.6）：失败路径在 reportError 之前捕获原始证据
+    // 闸门：--dry-run 零写盘契约优先（不跑子进程、无值得留的证据）——S8 评审 ① 裁定
+    if (opts.dryRun !== true && traceRoot !== null && tracePm !== null) {
+      await traceFailure('link', traceRoot, tracePm, traceChanges, traceInstalls, err)
+    }
     if (err instanceof LinkCancelledError) {
       process.stderr.write('已取消\n')
       return 1

@@ -1,0 +1,110 @@
+Review complete: 9 finding(s) across 8 selected item(s).
+
+─── src/commands/link.ts:525-526 ───
+[maintainability · medium] The failure-path trace assembly is duplicated almost verbatim between
+`link.ts` and `unlink.ts` (~18 lines each): the same `InstallError` narrowing, the
+`e.command/exitCode/stderrTail` extraction, the `installs` ternary append, and the `failure` object
+construction. Although `buildRunTrace` was extracted to eliminate the success/failure *shape*
+duplication, this fragment still has to be kept in sync manually — any field addition/adjustment
+must be edited in both places (and likely again in `repair.ts`). Consider extracting a companion
+factory (e.g. `buildFailureTrace(command, rootDir, pm, changes, installs, err)` living next to the
+command helpers in `link.ts`, which `unlink.ts`/`repair.ts` can import) so the evidential assembly
+has a single source of truth.
+
+
+
+─── src/commands/unlink.ts:414-415 ───
+[maintainability · low] The `.lpm/state.json` literal is hardcoded here (and again in the
+`write-state` branch below, plus once in `link.ts`), while the sibling `.lpm/last-run.json` is
+centralised through `lastRunPathOf()`. Since these are display/diagnostic targets for the same state
+file, a single shared constant (or deriving it via the state module) would prevent drift if the
+state path ever changes.
+
+
+
+─── src/commands/repair.ts:371-375 ───
+[style · medium] Nested ternary, which is disallowed by the project's code-quality rules and is hard
+to read/extend. Please flatten into an explicit `if/else` chain.
+
+-     const ok = probe.status === 'unknown'
+-       ? true
+-       : t.want === 'entity'
+-         ? probe.status === 'entity'
+-         : probe.status === 'link-to-lib'
++     let ok: boolean
++     if (probe.status === 'unknown') ok = true
++     else if (t.want === 'entity') ok = probe.status === 'entity'
++     else ok = probe.status === 'link-to-lib'
+
+
+─── src/commands/repair.ts:367-367 ───
+[maintainability · low] `rootDir` is never referenced inside `verifyAll` (both call sites pass it),
+so this parameter is dead. Removing it avoids implying root-relative path logic that doesn't exist.
+
+- function verifyAll(rootDir: string, targets: InstallTarget[]): Array<{ t: InstallTarget; ok: boolean }> {
++ function verifyAll(targets: InstallTarget[]): Array<{ t: InstallTarget; ok: boolean }> {
+
+
+─── src/commands/repair.ts:362-362 ───
+[maintainability · low] `printPlan` is only called after `runRepair` has already returned for
+`plan.actions === 0` (lines 507-515 return early), so this branch is unreachable dead code. Consider
+dropping it.
+
+
+
+─── src/commands/status.ts:266-268 ───
+[style · medium] Nested ternary (ternary inside ternary), which the code-quality rules disallow.
+Extract the suggestion text into a small helper (e.g. `suggestionOf(e)`) and use a single ternary.
+
+-       suggestion: e.issues.length > 0
+-         ? (e.originalConsistentDrift ? '若刚执行过 unlink 请优先重跑 lpm unlink；否则 lpm repair' : 'lpm repair')
+-         : null,
++       suggestion: suggestionOf(e),
+
+
+─── src/core/nmcheck.ts:25-25 ───
+[bug · medium] `isLink` compares the entry's realpath against its literal (non-canonical) path. For
+a genuine directory this only holds when every ancestor is already canonical; if the path contains a
+symlinked ancestor (e.g. macOS `/var` → `/private/var`, or a symlinked project/home dir) or a
+Windows 8.3 short name, `realpathSync(nmEntry)` differs from `nmEntry`, so a real entity directory
+is misclassified as a link (`link-elsewhere`) instead of `entity`. The unit test NMC-1 (ws built
+from `os.tmpdir()`) would exhibit exactly this on macOS. Compare against the canonical parent +
+basename instead of the literal path so only a real reparse point/junction on the final component
+counts as a link.
+
+-   return normPath(realTarget) !== normPath(nmEntry)
++   // 与「父目录 canonical + 自身文件名」比较：仅当最终组件本身是链接时二者才不等，
++   // 避免路径含符号链接祖先/Windows 短名时把真实目录误判为链接
++   const expected = join(realpathSync(dirname(nmEntry)), basename(nmEntry))
++   return normPath(realTarget) !== normPath(expected)
+
+
+─── src/commands/status.ts:136-138 ───
+[performance · medium] `declaredByManifest` (built just above from every member manifest) already
+contains exactly the data `findDependents` re-derives, yet `findDependents` re-reads and re-parses
+*every* member manifest for *each* key inside this loop (it does `readManifest(member.manifestPath)`
+per member). For a monorepo with many keys this is O(keys × members) redundant file reads +
+`JSON.parse` calls, and it duplicates the declaration source of truth (risk of the two drifting
+apart). The hit manifest paths can be derived directly from the cache, e.g. iterate
+`declaredByManifest` and test `deps.has(key)`. (If you do this, `findDependents`/`DepHit` imports
+here become unused.)
+
+-     let hits: DepHit[] = []
+-     try { hits = await findDependents(ws, key) } catch { hits = [] }
+-     for (const h of hits) fileSet.add(h.manifestPath)
++     // 命中文件直接从已缓存的 declaredByManifest 派生（同一份成员清单数据），
++     // 避免对每个 key 重扫全部成员清单（原为 O(keys × members) 次读盘 + JSON.parse）
++     for (const [mp, deps] of declaredByManifest) if (deps.has(key)) fileSet.add(mp)
+
+
+─── src/commands/repair.ts:265-265 ───
+[maintainability · low] `planOrphan` is invoked once per orphan file (inside `buildPlan`'s per-file
+loop), and this is the only place that resolves the "original value" when no sibling declares a
+non-local range. For a lib linked (localish) from two member directories with no sibling version,
+`ternaryOriginal` is therefore called twice — the user is asked to pick the source / type the range
+once per file, and the two files may end up with different originals. The spec models this as a
+single per-lib decision (`ternaryOriginal` returns a Map keyed by all hits). Consider resolving the
+original once per lib key (cache it for the remaining files of the same entry) so the whole lib gets
+one consistent value and a single prompt.
+
+
