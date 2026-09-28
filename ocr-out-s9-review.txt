@@ -1,0 +1,122 @@
+Review complete: 11 finding(s) across 3 selected item(s).
+
+─── src/commands/link.ts:456-456 ───
+[bug · high] `buildLinkPlan` is not a side-effect-free "build" step: the D-upsert writes
+`lpm.config.json` whenever `opts.dryRun !== true`. In the new interactive entry, `runPlanAndExecute`
+calls `buildLinkPlan` *before* the `clack.confirm` gate, so simply reaching the preview persists new
+registrations. If the user then answers No / Ctrl+C, the config has been mutated without any
+matching `state.json`/manifest change, which contradicts the spec's "取消发生在计划阶段（无写盘）" (§8 自决 3) and
+the "确认答否 → 零写盘" contract (§6 LI-6), and leaves an inconsistent registration behind.
+
+Consider deferring the actual `writeProjectConfig` to `executeLinkPlan` (build only records
+`planUpserts`), or add a flag so the pre-gate build is write-free.
+
+
+
+─── src/commands/link.ts:727-733 ───
+[style · low] This `hint` is a three-level nested ternary. The project style rules forbid nested
+ternaries (readability). Extracting a small `hintFor(c: LinkCandidate): string` helper would flatten
+it.
+
+-       hint: !c.cfgIntact
+-         ? '注册值损坏：修正 lpm.config.json 后重试'
+-         : c.linked
+-           ? '已链接，将跳过'
+-           : c.hitMembers.length === 0
+-             ? '未在依赖中，链接前需先 pnpm add'
+-             : c.rel,
++       hint: hintFor(c),
+
+
+─── src/commands/link.ts:778-778 ───
+[bug · low] This branch runs before the `dryRun` check, so a `--dry-run` invocation where all
+selected items are pruned (registered-value corrupt) prints the *indented* `  无待执行变更`. Spec §4.4
+(实现期裁定 4) requires the dry-run empty-plan form to be the single, non-indented `无待执行变更` line; only
+the interactive preview uses the two-space indent. Branch on `ctx.opts.dryRun` here as well.
+
+-     process.stdout.write('  无待执行变更\n')
++     process.stdout.write(ctx.opts.dryRun === true ? '无待执行变更\n' : '  无待执行变更\n')
+
+
+─── src/commands/unlink.ts:581-581 ───
+[bug · medium] The interactive path drops the caller's real `cwd`: `pickLinkedKeys` only receives `{
+rootDir, cfg }` and resolves typed paths with `resolveTarget(raw, ctx.cfg, ctx.rootDir,
+ctx.rootDir)`, while the direct path uses `resolveTarget(raw, cfg, rootDir, cwd)` — and
+`runUnlinkInteractive` already holds the true `cwd`. When lpm is invoked from a subdirectory (cwd !=
+rootDir), a relative path entered here is resolved against the workspace root, so it can silently
+resolve to the wrong key or be reported as `当前未处于链接状态`. Thread `cwd` through `pickLinkedKeys` (add
+it to `ctx`) and pass it as the 4th argument here.
+
+-         const rt = await resolveTarget(raw, ctx.cfg, ctx.rootDir, ctx.rootDir)
++         const rt = await resolveTarget(raw, ctx.cfg, ctx.rootDir, ctx.cwd)
+
+
+─── src/commands/unlink.ts:350-350 ───
+[maintainability · low] `UnlinkPlan.cwd` is populated here but never consumed anywhere —
+`executeUnlinkPlan` and `unlinkPlanView` both omit it from their destructuring, and no other read of
+`plan.cwd` exists. This is a dead field that also misleadingly suggests the execution stage has
+access to the original cwd. Drop the field (and the `cwd` member of the `buildUnlinkPlan` args type)
+or actually use it.
+
+
+
+─── src/commands/unlink.ts:578-579 ───
+[maintainability · low] This target→key resolution branch (registered / `!looksLikePath` /
+`startsWith('@')` heuristic + `resolveTarget` → `resolveMonorepo` → `name || toRel(...)`) is an
+almost-verbatim copy of the branch inside `buildUnlinkPlan`. Two copies of the same heuristic can
+drift, making the interactive path resolve keys differently from the direct path (the exact
+guarantee this refactor claims). Consider extracting one shared helper (e.g. `resolveTargetToKey`)
+and reusing it in both call sites.
+
+
+
+─── src/commands/unlink.ts:609-609 ───
+[performance · low] `unlinkPreflight` already does `await loadWorkspace(rootDir)` purely for
+validation, and the interactive entry loads the workspace a second time here just to obtain `ws`.
+Have `unlinkPreflight` return the loaded `Workspace` so this path reuses it instead of parsing the
+workspace twice (extra IO / duplicated work that only the interactive branch pays).
+
+
+
+─── src/commands/unlink.ts:642-642 ───
+[bug · low] `plan.aggregated` gets an entry for every existing manifest path *before* the value is
+classified (see the `aggregated.set(...)` a few lines above), so it also holds files that will not
+actually be rewritten (idempotent / no-hit / conflict-"current" files with `changedCount === 0`).
+Using `plan.aggregated.size` as `恢复 N 个文件` therefore over-reports the real rewrite count shown in
+the preview. Derive the count from entries with `changedCount > 0` (or sum `changedCount`) for an
+accurate confirmation message.
+
+
+
+─── src/commands/link.ts:741-741 ───
+[bug · low] Spec §4.5 (and §4.9) require the 「扫描发现」 group to apply the ★ hit marker with the *same*
+rule as the 「已注册」 group (「★ / 零命中标记的规则与「已注册」组完全相同」, same `hitMembers` judgment), including the
+hit-count-descending ordering. `collectLinkCandidates` does compute `hitMembers` for discovered
+libs, but this mapping only renders the zero-hit half of the rule (via `hint`) and never renders ★ —
+and the group is never sorted by `hitMembers.length`. A discovered lib that is actually declared by
+workspace members therefore looks identical to one that is not. Consider adding the ★ marker (and
+the same stable hit-count sort) here, mirroring the 已注册 group.
+
+-       label: `${d.key}  [未注册]`,
++       label: d.hitMembers.length > 0 ? `${d.key}  ★  [未注册]` : `${d.key}  [未注册]`,
+
+
+─── src/commands/unlink.ts:158-160 ───
+[maintainability · low] `UnlinkPlan.targets` is written in `buildUnlinkPlan`'s return value
+(`rootDir, cwd, pm, cfg, st, targets, ...`) but is never read afterwards — neither
+`executeUnlinkPlan` nor `unlinkPlanView` destructures it, and no other `plan.targets` access exists.
+It is a dead field (same class as the already-flagged `UnlinkPlan.cwd`) that also wrongly suggests
+the execution/preview stage still needs the raw targets. Drop it from the interface and the returned
+object (the `targets` used for parsing stays a local via `args`).
+
+
+
+─── src/commands/unlink.ts:583-586 ───
+[bug · low] This blanket `catch` also swallows `LinkCancelledError`, which `resolveMonorepo` →
+`pickMember()` throws when the user cancels the monorepo member-selection menu (link.ts:155). A
+deliberate user cancel must abort the command ("已取消", exit 1, failure trace — spec §4.10 / §8 裁定 2),
+but here it is misreported as "当前未处于链接状态" and the flow silently continues. Only genuine resolution
+failures should be downgraded; re-throw `LinkCancelledError` (e.g. `catch (err) { if (err instanceof
+LinkCancelledError) throw err; ... }`).
+
+

@@ -327,6 +327,8 @@ export async function collectLinkCandidates(
       discovered.push({ key: name, dirAbs: abs, dirLabel: abs, hitMembers: await hitMembersOf(rootDir, ws, name) })
     }
   }
+  // ★ 置顶：命中成员数降序（与「已注册」组同规则——spec §4.5）；稳定排序 → 并列保持扫描序
+  discovered.sort((a, b) => b.hitMembers.length - a.hitMembers.length)
   return { registered, discovered, scanNotes }
 }
 
@@ -364,6 +366,8 @@ interface LinkPlan {
   traceInstalls: LastRunTrace['installs']
   /** T4 用：交互模式下零命中项被剔除时的提示行（直通模式恒为空） */
   pruned: string[]
+  /** S9 交互入口：config upsert 延后到执行期（直通恒 false——计划期已写；见 buildLinkPlan D-upsert 分流） */
+  deferredRegistration: boolean
 }
 
 /** 统一前置（两入口共用同一次）：A5 workspace → loadWorkspace → readProjectConfig → A4 PM；「检测到包管理器」打印留此 */
@@ -395,6 +399,8 @@ async function buildLinkPlan(args: {
   traceChanges: LastRunTrace['changes']
   traceInstalls: LastRunTrace['installs']
   pruneZeroHit?: boolean
+  /** 交互入口传 true：config upsert 延后到 executeLinkPlan；直通不传（计划期写，保持原行为） */
+  deferRegistration?: boolean
 }): Promise<LinkPlan> {
   const { targets, opts, rootDir, cwd, ws, pm, traceChanges, traceInstalls } = args
   let cfg = args.cfg
@@ -412,7 +418,7 @@ async function buildLinkPlan(args: {
   const pendingLinks: Array<{ key: string; original: Record<string, string> }> = []
   const pruned: string[] = []
 
-  // ── 逐 target（遇错即停——聚合在内存，state/pkg 零写盘；config upsert 允许已发生）──
+  // ── 逐 target（遇错即停——聚合在内存，state/pkg 零写盘；config upsert：直通在计划期写，交互延后到执行期）──
   for (const raw of targets) {
     if (seenRaw.has(raw)) continue
     seenRaw.add(raw)
@@ -453,12 +459,14 @@ async function buildLinkPlan(args: {
     // D upsert（静默；dry-run 只记录）
     const relPath = toRel(rootDir, libDirAbs)
     const isNew = cfg?.libs[key] !== relPath
-    if (isNew && opts.dryRun !== true) {
-      const next: ProjectLpmConfig = cfg ?? { version: 1, libs: {} }
-      next.libs[key] = relPath
-      await writeProjectConfig(rootDir, next)
-      cfg = next
-      traceChanges.push({ target: key, action: 'upsert-registration', detail: `${key} → ${relPath}` })
+    if (isNew) {
+      // 内存合并（供本批后续 target 解析 + 交互入口执行期一次性写盘）
+      cfg = { ...(cfg ?? { version: 1, libs: {} }), libs: { ...(cfg?.libs ?? {}), [key]: relPath } }
+      // 直通：保持原行为——计划期即写盘 + 推 trace（dry-run 零写盘）；交互（deferRegistration=true）挪到 executeLinkPlan
+      if (args.deferRegistration !== true && opts.dryRun !== true) {
+        await writeProjectConfig(rootDir, cfg)
+        traceChanges.push({ target: key, action: 'upsert-registration', detail: `${key} → ${relPath}` })
+      }
     }
     planUpserts.push({ key, rel: relPath, isNew })
 
@@ -542,7 +550,7 @@ async function buildLinkPlan(args: {
   // ── 汇总出口 ──
   const totalChanged = [...aggregated.values()].reduce((s, e) => s + e.changedCount, 0)
   const skippedTotal = planSkipped.length + planAbandoned.length + dedupSkipped + unchangedTotal
-  return { rootDir, pm, cfg, st, targets, aggregated, planUpserts, planSkipped, planAbandoned, peerWarn, linkedTargets, pendingLinks, totalChanged, skippedTotal, traceChanges, traceInstalls, pruned }
+  return { rootDir, pm, cfg, st, targets, aggregated, planUpserts, planSkipped, planAbandoned, peerWarn, linkedTargets, pendingLinks, totalChanged, skippedTotal, traceChanges, traceInstalls, pruned, deferredRegistration: args.deferRegistration === true }
 }
 
 /** 把计划渲染成共享视图（行序 = 既有 dry-run 行序，逐字兼容 spec §4.4） */
@@ -569,6 +577,17 @@ function linkPlanView(plan: LinkPlan, opts: LinkOptions): PlanView {
 /** 执行（写序 = S6 裁决：state → package.json → install → last → watch → 提示 → 留痕）——逐字搬运原 438–521 */
 async function executeLinkPlan(plan: LinkPlan, opts: LinkOptions): Promise<number> {
   const { rootDir, pm, st, targets, aggregated, linkedTargets, pendingLinks, peerWarn, totalChanged, skippedTotal, traceChanges, traceInstalls } = plan
+  // 注册 upsert（仅交互入口延后至此：闸门确认后写一次；直通在计划期已写——deferredRegistration 恒 false）
+  if (plan.deferredRegistration) {
+    const newUpserts = plan.planUpserts.filter((u) => u.isNew)
+    if (newUpserts.length > 0) {
+      const base: ProjectLpmConfig = plan.cfg ?? { version: 1, libs: {} }
+      await writeProjectConfig(plan.rootDir, { ...base, libs: { ...(base.libs ?? {}) } })
+      for (const u of newUpserts) {
+        plan.traceChanges.push({ target: u.key, action: 'upsert-registration', detail: `${u.key} → ${u.rel}` })
+      }
+    }
+  }
   // E6a state（合并单次写；linkedAt = S6 生成 ISO 8601）
   const newLinks: LinkState['links'] = { ...(st?.links ?? {}) }
   for (const p of pendingLinks) {
@@ -738,7 +757,7 @@ async function pickLinkTargets(
       // ⚠️ value 必须是**路径**（不是包名）：该库尚未注册，`resolveTarget(包名)` 会因「含 / 的裸名被判为类路径」
       // 而抛 LinkArgumentError（`link.ts:115-121`）——走路径分支才能完成「隐形注册」（T4 评审 Important-1 修正）
       value: d.dirAbs,
-      label: `${d.key}  [未注册]`,
+      label: d.hitMembers.length > 0 ? `${d.key}  ★  [未注册]` : `${d.key}  [未注册]`,
       hint: d.hitMembers.length === 0 ? `${d.dirLabel}｜未在依赖中，链接前需先 pnpm add` : d.dirLabel,
     }))
   }
@@ -775,12 +794,12 @@ async function runPlanAndExecute(
     keep.push(raw)
   }
   if (keep.length === 0) {
-    process.stdout.write('  无待执行变更\n')
+    process.stdout.write(ctx.opts.dryRun === true ? '无待执行变更\n' : '  无待执行变更\n')
     return 0
   }
   const plan = await buildLinkPlan({
     targets: keep, opts: ctx.opts, rootDir: ctx.rootDir, cwd: ctx.cwd, ws: ctx.ws, cfg: ctx.cfg, pm: ctx.pm, st: ctx.st,
-    traceChanges: ctx.traceChanges, traceInstalls: ctx.traceInstalls, pruneZeroHit: true,
+    traceChanges: ctx.traceChanges, traceInstalls: ctx.traceInstalls, pruneZeroHit: true, deferRegistration: true,
   })
   for (const p of plan.pruned) process.stdout.write(`${p}\n`)
   const view = linkPlanView(plan, ctx.opts)

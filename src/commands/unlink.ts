@@ -554,7 +554,7 @@ async function promptUnlinkPaths(): Promise<string[] | typeof CANCELLED_U> {
 /** 列表多选（spec §4.6）：包名 +（链接的子包）+ 将恢复的 range + [漂移]/[记录损坏]；附「按路径取消…」 */
 async function pickLinkedKeys(
   items: LinkedItem[],
-  ctx: { rootDir: string; cfg: ProjectLpmConfig | null },
+  ctx: { rootDir: string; cwd: string; cfg: ProjectLpmConfig | null },
 ): Promise<string[] | typeof CANCELLED_U> {
   const options: Array<{ value: string; label: string }> = items.map((it) => ({
     value: it.key,
@@ -578,9 +578,10 @@ async function pickLinkedKeys(
     const registered = Object.hasOwn(ctx.cfg?.libs ?? {}, raw)
     if (!registered && looksLikePath && !raw.startsWith('@')) {
       try {
-        const rt = await resolveTarget(raw, ctx.cfg, ctx.rootDir, ctx.rootDir)
+        const rt = await resolveTarget(raw, ctx.cfg, ctx.rootDir, ctx.cwd)
         key = rt.source === 'name' ? rt.key : ((await resolveMonorepo(rt.libDirAbs)).name || toRel(ctx.rootDir, rt.libDirAbs))
-      } catch {
+      } catch (err) {
+        if (err instanceof LinkCancelledError) throw err   // 用户在 B4 让选里主动取消 → 必须中止（spec §4.10 / §8 裁定 2）
         process.stdout.write(`当前未处于链接状态：${raw}。可用 lpm status 核对三方状态\n`)
         continue
       }
@@ -616,7 +617,7 @@ async function runUnlinkInteractive(opts: UnlinkOptions, cwd: string): Promise<n
       process.stdout.write('  lpm forget  移除 lib 注册（待 S11 上线）\n')
       return 0
     }
-    const picked = await pickLinkedKeys(items, { rootDir, cfg })
+    const picked = await pickLinkedKeys(items, { rootDir, cwd, cfg })
     if (picked === CANCELLED_U) { process.stdout.write('已取消\n'); return 1 }
     if (picked.length === 0) { process.stdout.write('未选择任何库\n'); return 1 }
     // 前置剔除：记录损坏项（spec §4.6）——否则 buildUnlinkPlan 抛 LinkStateCorruptError 会炸掉整批
@@ -638,8 +639,9 @@ async function runUnlinkInteractive(opts: UnlinkOptions, cwd: string): Promise<n
     }
     if (opts.dryRun === true) { process.stdout.write(renderPlan(view, 'dry-run')); return 0 }
     process.stdout.write(renderPlan(view, 'preview'))
+    const restoredFiles = [...plan.aggregated.values()].filter((a) => a.changedCount > 0).length
     const ok = await clack.confirm({
-      message: `执行以上计划？（恢复 ${plan.aggregated.size} 个文件、执行 1 次安装）`,
+      message: `执行以上计划？（恢复 ${restoredFiles} 个文件、执行 1 次安装）`,
       initialValue: false,
     })
     if (clack.isCancel(ok) || ok !== true) { process.stdout.write('已取消\n'); return 1 }  // 闸门取消不写留痕（裁定 2）

@@ -152,11 +152,20 @@ describe('link 交互入口', () => {
     expect(existsSync(join(ws, '.lpm', 'state.json'))).toBe(true)
   })
 
-  it('LI-6：确认答否 → 已取消 + exit 1 + 零写盘', async () => {
-    const lib = makeLib(); const ws = makeWs()
-    registerLib(ws, '@t/lib', lib)
-    stubTty(true); makeHome()
-    vi.mocked(groupMultiselect).mockResolvedValueOnce(['@t/lib'])
+  it('LI-6：确认答否 → 已取消 + exit 1 + 零写盘（含未注册「扫描发现」项不落 config）', async () => {
+    // 用 LI-16 的「扫描发现」配方：候选来自扫描目录、未注册 → 若在闸门之前写盘则 libs 会被 upsert
+    const ws = makeWs()                                   // libs 为空
+    const home = makeHome()
+    const scanRoot = mkdtempSync(join(tmpdir(), 'lpm-scan-'))
+    dirs.push(scanRoot)
+    const lib = join(scanRoot, 'lib')
+    mkdirSync(join(lib, 'node_modules'), { recursive: true })
+    writeFileSync(join(lib, 'node_modules', '.keep'), '', 'utf8')
+    writeFileSync(join(lib, 'package.json'), JSON.stringify({ name: '@t/lib', main: './index.js' }), 'utf8')
+    writeFileSync(join(lib, 'index.js'), 'export = 1;\n', 'utf8')
+    writeFileSync(join(home, '.lpm', 'config.json'), JSON.stringify({ version: 1, scanDirs: [scanRoot] }), 'utf8')
+    stubTty(true)
+    vi.mocked(groupMultiselect).mockResolvedValueOnce([lib])   // 扫描发现项的 value = 库目录绝对路径
     vi.mocked(confirm).mockResolvedValueOnce(false)
     const cap = captureOut()
     const code = await runLink([], {}, ws)
@@ -164,6 +173,8 @@ describe('link 交互入口', () => {
     expect(cap.out.join('')).toContain('已取消')
     expect(execa).not.toHaveBeenCalled()
     expect(readFileSync(join(ws, 'apps/web/package.json'), 'utf8')).toContain('^1.0.0')
+    // Fix 1 回归钉：闸门之前零写盘——答否后 lpm.config.json 的 libs 仍为空对象
+    expect(JSON.parse(readFileSync(join(ws, 'lpm.config.json'), 'utf8')).libs).toEqual({})
   })
 
   it('LI-7：Ctrl+C（isCancel）→ 已取消 + exit 1', async () => {
@@ -217,14 +228,23 @@ describe('link 交互入口', () => {
     expect(readFileSync(join(ws, 'apps/web/package.json'), 'utf8')).toContain('link:')
   })
 
-  it('LI-11：注册值损坏项被剔除 + 提示', async () => {
+  it('LI-11：注册值损坏项被剔除 + 提示（dry-run 空分支同直通形态）', async () => {
+    const cfgBad = JSON.stringify({ version: 1, packageManager: 'pnpm', libs: { '@t/bad': 42 } })
     makeLib()
-    const ws = makeWs({ 'lpm.config.json': JSON.stringify({ version: 1, packageManager: 'pnpm', libs: { '@t/bad': 42 } }) })
+    const ws = makeWs({ 'lpm.config.json': cfgBad })
     stubTty(true); makeHome()
     vi.mocked(groupMultiselect).mockResolvedValueOnce(['@t/bad'])
     const cap = captureOut()
     expect(await runLink([], {}, ws)).toBe(0)
     expect(cap.out.join('')).toContain('注册值损坏，已跳过')
+    // Fix 3 回归钉：dry-run 下「前置剔除即空」必须是直通同形、**行首无缩进**的单行——回退修复即变红
+    // （原断言 endsWith('无待执行变更\n') 是假钉：缩进版 '  无待执行变更\n' 同样满足；故此处锚定行首）
+    const ws2 = makeWs({ 'lpm.config.json': cfgBad })
+    vi.mocked(groupMultiselect).mockResolvedValueOnce(['@t/bad'])
+    cap.out.length = 0
+    expect(await runLink([], { dryRun: true }, ws2)).toBe(0)
+    expect(cap.out.join('')).toMatch(/(^|\n)无待执行变更\n$/u)
+    expect(cap.out.join('')).not.toContain('执行计划预览：')
   })
 
   it('LI-12：无目标 + --dry-run → dry-run 计划 + 零写盘零子进程 + exit 0', async () => {
@@ -328,5 +348,29 @@ describe('link 交互入口', () => {
     expect(cap.out.join('')).not.toContain('执行计划预览：')          // 不得是预览形态
     expect(cap.out.join('').endsWith('无待执行变更\n')).toBe(true)    // 且末行是无缩进单行（dry-run 形态）
     expect(confirm).not.toHaveBeenCalled()
+  })
+
+  it('LI-22：扫描发现组补 ★（被成员依赖声明者带星——spec §4.5 与已注册组同规则）', async () => {
+    const ws = makeWs()                                   // libs 为空：候选只能来自扫描发现
+    const home = makeHome()
+    const scanRoot = mkdtempSync(join(tmpdir(), 'lpm-scan-'))
+    dirs.push(scanRoot)
+    const lib = join(scanRoot, 'lib')                     // name=@t/lib：被 apps/web 依赖声明 → hitMembers 非空
+    mkdirSync(join(lib, 'node_modules'), { recursive: true })
+    writeFileSync(join(lib, 'node_modules', '.keep'), '', 'utf8')
+    writeFileSync(join(lib, 'package.json'), JSON.stringify({ name: '@t/lib', main: './index.js' }), 'utf8')
+    writeFileSync(join(lib, 'index.js'), 'export = 1;\n', 'utf8')
+    writeFileSync(join(home, '.lpm', 'config.json'), JSON.stringify({ version: 1, scanDirs: [scanRoot] }), 'utf8')
+    stubTty(true)
+    vi.mocked(groupMultiselect).mockResolvedValueOnce([])   // 空选中：只读交给它的 options，不进执行
+    const cap = captureOut()
+    await runLink([], {}, ws)
+    const arg = vi.mocked(groupMultiselect).mock.calls[0]?.[0] as {
+      options: Record<string, Array<{ value: string; label: string }>>
+    }
+    const discovered = Object.values(arg.options).flat().find((o) => o.value === lib)
+    // Fix 4 回归钉：命中成员者 label 必须带 ★（若退回 `${d.key}  [未注册]` 此处立即为 undefined→变红）
+    expect(discovered?.label).toContain('★')
+    expect(cap.out.join('')).toContain('未选择任何库')
   })
 })

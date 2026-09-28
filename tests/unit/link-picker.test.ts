@@ -128,4 +128,16 @@ describe('collectLinkCandidates', () => {
     const ws = await loadWorkspace(root)
     expect((await collectLinkCandidates(root, ws, null, null, [])).discovered).toEqual([])
   })
+  it('PC-11：discovered 按命中成员数降序（命中者在前）——Fix 4 回归钉', async () => {
+    // 两个扫描目录各放一个库：先扫到的 @t/none 零命中、后扫到的 @t/lib 被两成员依赖。
+    // 修复前 discovered 保持扫描序 ['@t/none','@t/lib']；排序修复后命中者置顶。
+    const scanNone = mkTree({ 'aa-none/package.json': JSON.stringify({ name: '@t/none' }) })
+    const scanHit = mkTree({ 'zz-lib/package.json': JSON.stringify({ name: '@t/lib' }) })
+    const root = mkTree(wsFiles())
+    const ws = await loadWorkspace(root)
+    const { discovered } = await collectLinkCandidates(root, ws, null, null, [scanNone, scanHit])
+    expect(discovered.map((d) => d.key)).toEqual(['@t/lib', '@t/none'])
+    expect(discovered[0].hitMembers.length).toBeGreaterThan(0)
+    expect(discovered[1].hitMembers.length).toBe(0)
+  })
 })

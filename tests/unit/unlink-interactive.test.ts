@@ -14,7 +14,7 @@ vi.mock('@clack/prompts', () => ({
 vi.mock('execa', () => ({ execa: vi.fn() }))
 
 import { execa } from 'execa'
-import { multiselect, confirm, text, isCancel } from '@clack/prompts'
+import { multiselect, select, confirm, text, isCancel } from '@clack/prompts'
 import { collectLinkedItems, runUnlink } from '../../src/commands/unlink.js'
 import { loadWorkspace } from '../../src/core/workspace.js'
 import type { LinkState, ProjectLpmConfig } from '../../src/state/types.js'
@@ -312,5 +312,64 @@ describe('unlink 交互入口', () => {
     expect(cap.out.join('')).toContain('dry-run 执行计划（不落任何盘、不执行任何子进程）：')
     expect(cap.out.join('')).not.toContain('执行计划预览：')
     expect(confirm).not.toHaveBeenCalled()
+  })
+
+  it('UI-21：按路径取消时以真实 cwd 解析相对路径（子目录命中）', async () => {
+    const ws = makeWs({
+      // 库目录位于子目录：只有按 cwd=apps/web 解析 './lib-x' 才能命中（用 rootDir 解析会落到 ws/lib-x，不存在）
+      'apps/web/lib-x/package.json': JSON.stringify({ name: '@t/lib', main: './index.js' }),
+      'apps/web/lib-x/index.js': 'export = 1;\n',
+      '.lpm/state.json': JSON.stringify({ version: 1, links: { '@t/lib': { original: { 'apps/web/package.json': '^1.0.0' }, linkedAt: 'x' } } }),
+    })
+    stubTty(true); makeHome()
+    vi.mocked(multiselect).mockResolvedValueOnce(['\u0000__path__'])
+    vi.mocked(text).mockResolvedValueOnce('./lib-x')
+    vi.mocked(confirm).mockResolvedValueOnce(false)
+    const cap = captureOut()
+    expect(await runUnlink([], {}, join(ws, 'apps/web'))).toBe(1)   // cwd = 子目录
+    expect(cap.out.join('')).toContain('已取消')
+    // Fix 2 回归钉：若仍以 rootDir 解析，'./lib-x' 解析失败 → 打印「当前未处于链接状态」
+    expect(cap.out.join('')).not.toContain('当前未处于链接状态')
+  })
+
+  it('UI-22：按路径取消 → monorepo 让选取消必须中止（catch 不得吞 LinkCancelledError）', async () => {
+    const ws = makeWs({
+      // lib 路径 = 无 package.json 的 pnpm monorepo 根（有 pnpm-workspace.yaml + 成员包）→ 走 pickMember
+      'mono/pnpm-workspace.yaml': "packages:\n  - 'libs/a'\n",
+      'mono/libs/a/package.json': JSON.stringify({ name: '@t/lib' }),
+      '.lpm/state.json': JSON.stringify({ version: 1, links: { '@t/lib': { original: { 'apps/web/package.json': '^1.0.0' }, linkedAt: 'x' } } }),
+    })
+    stubTty(true); makeHome()
+    vi.mocked(multiselect).mockResolvedValueOnce(['\u0000__path__'])
+    vi.mocked(text).mockResolvedValueOnce('./mono')
+    vi.mocked(select).mockResolvedValueOnce('@t/lib' as never)   // 值不重要——isCancel 队列判定为取消
+    // isCancel 队列：#1 multiselect 结果 false；#2 text 结果 false；#3 pickMember 的 select 结果 true（取消）
+    vi.mocked(isCancel).mockReturnValueOnce(false).mockReturnValueOnce(false).mockReturnValueOnce(true)
+    const cap = captureOut()
+    expect(await runUnlink([], {}, ws)).toBe(1)
+    expect(cap.out.join('') + cap.err.join('')).toContain('已取消')
+    // Fix 5 回归钉：被吞掉时会打印「当前未处于链接状态」并继续（而非中止）
+    expect(cap.out.join('')).not.toContain('当前未处于链接状态')
+  })
+
+  it('UI-23：确认语的「N 个文件」只数真正会改写的文件（幂等条目不计）', async () => {
+    const ws = makeWs({
+      // @t/lib：声明为 link: → 会被恢复（changedCount>0）
+      'apps/web/package.json': JSON.stringify({ name: 'web', dependencies: { '@t/lib': 'link:../../lpm-lib' } }),
+      // @t/two：声明值 === original → 幂等跳过（changedCount===0，但 aggregated 仍含该文件条目）
+      'apps/server/package.json': JSON.stringify({ name: 'server', dependencies: { '@t/two': '^2.0.0' } }),
+      '.lpm/state.json': JSON.stringify({ version: 1, links: {
+        '@t/lib': { original: { 'apps/web/package.json': '^1.0.0' }, linkedAt: 'x' },
+        '@t/two': { original: { 'apps/server/package.json': '^2.0.0' }, linkedAt: 'x' },
+      } }),
+    })
+    stubTty(true); makeHome()
+    vi.mocked(multiselect).mockResolvedValueOnce(['@t/lib', '@t/two'])
+    vi.mocked(confirm).mockResolvedValueOnce(false)
+    captureOut()
+    expect(await runUnlink([], {}, ws)).toBe(1)
+    const msg = (vi.mocked(confirm).mock.calls[0]?.[0] as { message: string }).message
+    // Fix 6 回归钉：旧代码用 plan.aggregated.size（=2，含幂等条目）→ 会写「恢复 2 个文件」
+    expect(msg).toContain('恢复 1 个文件')
   })
 })
