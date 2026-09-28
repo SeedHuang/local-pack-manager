@@ -442,3 +442,21 @@ describe('lpm 验收 6 e2e（S8 spec §7）', () => {
     expect(JSON.parse(readFileSync(join(ws, 'apps/web/package.json'), 'utf8')).dependencies['@t/lib']).toBe('^1.0.0')
   })
 })
+
+// S9 e2e（spec §4.10）：无参数 + 非真终端（spawn 即非 TTY）→ 一行提示 + exit 1，且不得出现菜单残片
+describe('lpm link / unlink 无参数 e2e（S9）', () => {
+  it('E2E-S9-1：lpm link 无参数（非 TTY）→ exit 1 + 提示直通用法 + 无菜单残片', async () => {
+    const r = await runCli(['link'], os.tmpdir())
+    expect(r.exitCode).toBe(1)
+    expect(r.stdout).toContain('当前不是交互终端；直通用法：lpm link <名字|路径>... [--watch] [--dry-run]')
+    expect(r.stdout).not.toContain('◆')   // clack 菜单符号，出现即为「卡死前糊出的半张菜单」
+    expect(r.stdout).not.toContain('│')
+  })
+  it('E2E-S9-2：lpm unlink 无参数（非 TTY）→ exit 1 + 提示直通用法 + 无菜单残片', async () => {
+    const r = await runCli(['unlink'], os.tmpdir())
+    expect(r.exitCode).toBe(1)
+    expect(r.stdout).toContain('当前不是交互终端；直通用法：lpm unlink <名字|路径>... [--all] [--dry-run]')
+    expect(r.stdout).not.toContain('◆')
+    expect(r.stdout).not.toContain('│')
+  })
+})
