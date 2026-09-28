@@ -405,6 +405,8 @@ async function resolveLinkCollection(
   const libs: Record<string, unknown> = cfg?.libs ?? {}
   let names: readonly unknown[]
   let source: 'last' | 'all' | 'preset'
+  // trim 后的预设名（preset 分支赋值；校验侧用 trim 判空，查表必须同口径——否则 `--preset "前端 "` 查不到，OCR #2）
+  let presetName = ''
   if (opts.all === true) {
     names = Object.keys(libs)
     source = 'all'
@@ -419,21 +421,21 @@ async function resolveLinkCollection(
       throw new LinkArgumentError('', '没有上次链接的记录。先做一次批量 link（一次给 ≥ 2 个目标、或 --all / --preset）建立记录')
     }
   } else {
-    const name = opts.preset as string
+    presetName = (opts.preset as string).trim()
     const view = readPresets(cfg)
-    if (view.corrupt.includes(name)) {
-      throw new LinkArgumentError('', `预设 ${name} 内容损坏（应为字符串数组）。可 lpm preset rm ${name} 删除后重存`)
+    if (view.corrupt.includes(presetName)) {
+      throw new LinkArgumentError('', `预设 ${presetName} 内容损坏（应为字符串数组）。可 lpm preset rm ${presetName} 删除后重存`)
     }
-    if (!Object.hasOwn(view.raw, name)) {
+    if (!Object.hasOwn(view.raw, presetName)) {
       const avail = Object.keys(view.raw)
       throw new LinkArgumentError('', avail.length === 0
-        ? `预设不存在：${name}。当前没有任何预设。先 lpm save <名字>`
-        : `预设不存在：${name}。可用预设：${avail.join('、')}`)
+        ? `预设不存在：${presetName}。当前没有任何预设。先 lpm save <名字>`
+        : `预设不存在：${presetName}。可用预设：${avail.join('、')}`)
     }
-    names = view.entries[name] ?? []
+    names = view.entries[presetName] ?? []
     source = 'preset'
     if (names.length === 0) {
-      throw new LinkArgumentError('', `预设 ${name} 是空的。先 lpm save ${name} 写入内容`)
+      throw new LinkArgumentError('', `预设 ${presetName} 是空的。先 lpm save ${presetName} 写入内容`)
     }
   }
   const missing: string[] = []
@@ -447,9 +449,10 @@ async function resolveLinkCollection(
     const parts: string[] = []
     if (missing.length > 0) parts.push(`${missing.length} 个名字已不在注册表：${missing.join('、')}`)
     if (corrupt.length > 0) parts.push(`${corrupt.length} 个名字的注册值损坏（应为字符串）：${corrupt.join('、')}`)
-    const where = source === 'preset' ? `预设 ${opts.preset}` : source === 'last' ? '上次链接的记录' : '--all 的注册表'
+    const whereBySource = { preset: `预设 ${presetName}`, last: '上次链接的记录', all: '--all 的注册表' } as const
+    const where = whereBySource[source]
     const hints = source === 'preset'
-      ? `\n  用路径重新注册：lpm link <lib 路径>\n  或修掉这个预设：lpm preset rm ${opts.preset} 后重新 lpm save ${opts.preset}`
+      ? `\n  用路径重新注册：lpm link <lib 路径>\n  或修掉这个预设：lpm preset rm ${presetName} 后重新 lpm save ${presetName}`
       : '\n  用路径重新注册：lpm link <lib 路径>'
     throw new LinkArgumentError('', `${where}里有${parts.join('；')}。${hints}`)
   }
@@ -647,6 +650,16 @@ function linkPlanView(plan: LinkPlan, opts: LinkOptions): PlanView {
   return { entries, install: { command: buildInstallCommandLine(plan.pm), verify: null }, watch }
 }
 
+/** S10：把 last 对齐到当前 links 全集；失败仅警告（spec §4.6 两处落点共用） */
+async function refreshLastQuietly(rootDir: string): Promise<void> {
+  try {
+    const fresh = await readState(rootDir)
+    await writeLast(rootDir, { version: 1, names: Object.keys(fresh?.links ?? {}) })
+  } catch {
+    process.stderr.write('警告：last.json 写入失败（不影响链接）\n')
+  }
+}
+
 /** 执行（写序 = S6 裁决：state → package.json → install → last → watch → 提示 → 留痕）——逐字搬运原 438–521 */
 async function executeLinkPlan(plan: LinkPlan, opts: LinkOptions): Promise<number> {
   const { rootDir, pm, st, targets, aggregated, linkedTargets, pendingLinks, peerWarn, totalChanged, skippedTotal, traceChanges, traceInstalls } = plan
@@ -687,12 +700,7 @@ async function executeLinkPlan(plan: LinkPlan, opts: LinkOptions): Promise<numbe
 
   // I last（S10：集合级操作一律刷新；直通沿用「targets ≥ 2 且至少成功 1 个」）
   if ((plan.forceLastWrite || targets.length >= 2) && linkedTargets.length >= 1) {
-    try {
-      const fresh = await readState(rootDir)
-      await writeLast(rootDir, { version: 1, names: Object.keys(fresh?.links ?? {}) })
-    } catch {
-      process.stderr.write('警告：last.json 写入失败（不影响链接）\n')
-    }
+    await refreshLastQuietly(rootDir)
   }
 
   // H watch（Ruling 2：lib 自身 PM；前台驻留；Ctrl+C 兜底 kill；H7 spawn 失败警告）
@@ -897,6 +905,9 @@ async function runPlanAndExecute(
   }
   if (keep.length === 0) {
     process.stdout.write(ctx.opts.dryRun === true ? '无待执行变更\n' : '  无待执行变更\n')
+    // S10 表 #3（spec §4.6 实现落点 3）：虚拟项驱动的集合操作无论 target 数都刷新 last——
+    // 全 corrupt 前置剔除也走这里（buildLinkPlan 之前），同样对齐到当前 links 全集
+    if (collectionLevel && ctx.opts.dryRun !== true) await refreshLastQuietly(ctx.rootDir)
     return 0
   }
   const plan = await buildLinkPlan({
@@ -917,12 +928,7 @@ async function runPlanAndExecute(
     // S10 表 #3（spec §4.6 实现落点 3）：交互集合级操作即使全部命中「已链接、跳过」，
     // 也把 last 对齐到当前 links 全集（与直通 runLink 空分支同形——失败仅警告）
     if (collectionLevel === true) {
-      try {
-        const fresh = await readState(ctx.rootDir)
-        await writeLast(ctx.rootDir, { version: 1, names: Object.keys(fresh?.links ?? {}) })
-      } catch {
-        process.stderr.write('警告：last.json 写入失败（不影响链接）\n')
-      }
+      await refreshLastQuietly(ctx.rootDir)
     }
     return 0
   }
@@ -1025,12 +1031,7 @@ export async function runLink(targets: readonly string[], opts: LinkOptions, cwd
         process.stdout.write('无待执行变更\n') // spec §4.4 K3：计划体为空 + 「无待执行变更」
       } else if (hasSwitch) {
         // S10 表 #2（spec §4.6 实现落点 2）：集合级操作即使全跳过，也把 last 对齐到当前 links 全集
-        try {
-          const fresh = await readState(rootDir)
-          await writeLast(rootDir, { version: 1, names: Object.keys(fresh?.links ?? {}) })
-        } catch {
-          process.stderr.write('警告：last.json 写入失败（不影响链接）\n')
-        }
+        await refreshLastQuietly(rootDir)
       }
       return 0
     }

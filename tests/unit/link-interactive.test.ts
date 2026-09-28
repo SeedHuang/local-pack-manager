@@ -548,4 +548,24 @@ describe('link 主列表「快捷」组（spec §4.10）', () => {
     // 判别力（最终评审 Important-1）：不加修复时交互空计划分支不写 last，终态仍是 ['@t/a']，此断言必红
     expect(JSON.parse(readFileSync(join(ws, '.lpm', 'last.json'), 'utf8')).names).toEqual(['@t/a', '@t/b'])
   })
+
+  it('VI-11：虚拟项展开后全 corrupt 前置剔除 → keep 空也把 last 刷到 links 全集（OCR #3 回归钉）', async () => {
+    // 注册值损坏（libs['@t/bad']=42，非字符串）：损坏条目仍计入 registered → 「快捷」组的「上次链接的」出现
+    const ws = makeWs({
+      'lpm.config.json': JSON.stringify({ version: 1, packageManager: 'pnpm', libs: { '@t/bad': 42 } }),
+      '.lpm/state.json': JSON.stringify({ version: 1, links: {
+        '@t/x': { original: { 'apps/web/package.json': '^1.0.0' }, linkedAt: '2026-01-01T00:00:00.000Z' },
+      } }),
+    })
+    writeLast(ws, ['@t/bad'])
+    stubTty(true); makeHome()
+    vi.mocked(groupMultiselect).mockResolvedValueOnce(['\u0000__last__'] as never)
+    const cap = captureOut()
+    expect(await runLink([], {}, ws)).toBe(0)
+    expect(shortcutOpts().map((o) => o.value)).toContain('\u0000__last__')    // 「上次链接的」确已出现
+    expect(cap.out.join('')).toContain('⚠️ @t/bad 注册值损坏，已跳过')          // 前置剔除确实发生
+    expect(cap.out.join('')).toContain('无待执行变更')                          // keep 空 → 早退分支
+    // 判别力：不修时该分支在 buildLinkPlan 之前 return，不写 last → 终态仍是 ['@t/bad']；修复后刷新到 links 全集 ['@t/x']
+    expect(JSON.parse(readFileSync(join(ws, '.lpm', 'last.json'), 'utf8')).names).toEqual(['@t/x'])
+  })
 })

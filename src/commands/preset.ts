@@ -10,7 +10,12 @@ import * as clack from '@clack/prompts'
 import type { ProjectLpmConfig } from '../state/types.js'
 
 /** 预设相关错误（命令域；沿用 S6/S7「错误类归命令文件」先例） */
-export class PresetError extends Error {}
+export class PresetError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'PresetError'
+  }
+}
 
 /** 预设表守卫后的视图（只读）：raw 供读-改-写，entries 只含合法条目，corrupt 记录脏条目名 */
 export interface PresetView {
@@ -86,6 +91,14 @@ export async function runSave(name: string, cwd: string = process.cwd()): Promis
   }
 }
 
+/** 写回预设表（读-改-写：next 空对象 → 移除 presets 字段；不丢损坏条目/未知字段）——rm 直通与交互两处共用 */
+async function persistPresets(rootDir: string, cfg: ProjectLpmConfig, next: Record<string, unknown>): Promise<void> {
+  const nextCfg: ProjectLpmConfig = { ...cfg }
+  if (Object.keys(next).length === 0) delete nextCfg.presets
+  else nextCfg.presets = next as Record<string, string[]>
+  await writeProjectConfig(rootDir, nextCfg)
+}
+
 /** `lpm preset rm <名>`：按名删除（spec §4.9）——损坏条目也可删（这是修好脏配置的唯一入口） */
 async function runPresetRm(name: string, cwd: string): Promise<number> {
   const rootDir = await findWorkspaceRoot(cwd)
@@ -104,10 +117,7 @@ async function runPresetRm(name: string, cwd: string): Promise<number> {
   }
   const next: Record<string, unknown> = { ...view.raw }
   delete next[name]
-  const nextCfg: ProjectLpmConfig = { ...cfg }
-  if (Object.keys(next).length === 0) delete nextCfg.presets
-  else nextCfg.presets = next as Record<string, string[]>
-  await writeProjectConfig(rootDir, nextCfg)
+  await persistPresets(rootDir, cfg, next)
   process.stdout.write(`已删除预设：${name}\n`)
   return 0
 }
@@ -142,10 +152,7 @@ async function runPresetInteractive(cwd: string): Promise<number> {
   if (clack.isCancel(ok) || ok !== true) { process.stdout.write('已取消\n'); return 1 }
   const next: Record<string, unknown> = { ...view.raw }
   for (const n of chosen) delete next[n]
-  const nextCfg: ProjectLpmConfig = { ...cfg }
-  if (Object.keys(next).length === 0) delete nextCfg.presets
-  else nextCfg.presets = next as Record<string, string[]>
-  await writeProjectConfig(rootDir, nextCfg)
+  await persistPresets(rootDir, cfg, next)
   for (const n of chosen) process.stdout.write(`已删除预设：${n}\n`)
   return 0
 }

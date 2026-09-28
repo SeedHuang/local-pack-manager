@@ -113,6 +113,16 @@ describe('link 集合级直通（spec §4.4 / §4.5）', () => {
     expect(depsOf(ws)['@t/b']).toBe('^1.0.0')
   })
 
+  it('LC-19：--preset 带尾空格 → trim 后命中（OCR #2 回归钉）', async () => {
+    const { ws } = setup(['a'])
+    writeCfg(ws, { version: 1, packageManager: 'pnpm', libs: cfgOf(ws).libs, presets: { 前端: ['@t/a'] } })
+    vi.mocked(execa).mockResolvedValue({ exitCode: 0 } as never)
+    captureOut()
+    // 判别力：查表用原文 '前端 ' 时 → 「预设不存在：前端 」报错 exit 1；trim 后命中 → exit 0
+    expect(await runLink([], { preset: '前端 ' }, ws)).toBe(0)
+    expect(depsOf(ws)['@t/a']).toContain('link:')
+  })
+
   it('LC-4：--last 无记录 / names 为空 → 报错 exit 1 + 零写盘，且提示不含 lpm save', async () => {
     for (const withFile of [false, true]) {
       const { ws } = setup(['a'])
