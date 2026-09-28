@@ -62,8 +62,9 @@ lpm link [--watch] [--dry-run]
         ├─ 读 readState → 已注册项标 [已链接]
         ├─ findDependents(ws, key) → ★ 命中成员数排序；零命中标「未在依赖中」
         └─ readUserConfig().scanDirs → 直接子目录扫描 → 未注册候选
+        └─ last.json（readLast）→ 虚拟项「上次链接的」（有记录时）**——S10 追加**
   A7  空态？两组皆空 → 向导（输路径 / 加扫描目录 / 退出）（§4.7）
-  A8  主列表多选（clack.groupMultiselect）→ 选中集合（已注册 key / 扫描发现 key / 手输路径解析出的 target）
+  A8  主列表多选（clack.groupMultiselect）→ 选中集合（**S10 追加**：「快捷」组虚拟项展开 / 已注册 key / 扫描发现 key / 手输路径解析出的 target）
   A9  构建计划（与直通共用 buildLinkPlan：注册 upsert、三态判定 ternaryOriginal、B4 让选、批量改写、install、watch）
   A10 【闸门】打印执行计划预览（§4.4） → clack.confirm(默认否)
         ├─ dry-run 组合：只打印，不确认、不执行 → exit 0
@@ -126,6 +127,8 @@ lpm link <...> / lpm unlink <...|--all>
 ### 4.3 公共 API 面
 
 **冻结面零改动**：S1 §4.3/§4.4、S3 §4.3、S5 rewriter 7 导出、S6 §4.3、S7 §4.3、S8 §4.3 所列公共 API 签名不变。`runLink(targets, opts, cwd)` 与 `runUnlink(targets, opts, cwd)` **签名零改动**（本 spec 不改其形参，只改内部结构）；`LinkOptions` / `UnlinkOptions` **不扩字段**。新增导出沿用「公共 API 冻结面约定」：
+
+> **S10 追加（2026-09-28）**：上句的「不扩字段」是 **S9 对自身范围**的界定，非永久禁令。S10 按裁决 7 给 `LinkOptions` **追加了 3 个可选字段**（`last?` / `all?` / `preset?`，见 S10 spec §4.3）；三字段缺省时行为与 S9 交付态完全一致，`runLink` 形参未动。`UnlinkOptions` 仍未扩。
 
 ```ts
 // ── src/commands/plan-view.ts（全部新增）──
@@ -228,6 +231,7 @@ export class PathInputError extends Error {}
 
 | 组 | 内容 | 标记 |
 |---|---|---|
+| 快捷（N）——**S10 追加** | 「全部已注册（N）」（注册 ≥ 1 时出现）；「上次链接的（N）」（last.json 有记录时出现，无记录则整项隐藏） | 虚拟项：**本身不是最终勾选项**，提交后展开并入勾选集合；「上次链接的」展开时剔除已不在 `cfg.libs` 的名字并逐行提示 |
 | 已注册（N） | `cfg.libs` 的键；label = `包名`；hint 显示相对路径 | `★` 命中依赖（按命中成员数降序置顶）；`[已链接]`（state 有条目）时 hint 写「已链接，将跳过」；零命中时 hint 写「未在依赖中，链接前需先 pnpm add」 |
 | 扫描发现（M） | `scanDirs` 直接子目录里的未注册库（§4.9） | `[未注册]` + 目录标签（**绝对路径原样**，与 §4.9 的展示口径一致）；**★ / 零命中标记的规则与「已注册」组完全相同**（同一个 `hitMembers` 判定，见下） |
 | 其他…（固定一项） | 手输路径入口；**本身不是最终勾选项** | label 带格式引导：`绝对 / 相对 / 多个用空格分隔 / 含空格加引号` |
@@ -422,6 +426,7 @@ runLink(targets, opts, cwd)
 - 空态「添加扫描目录」写盘失败 → 一行错误 + 仍留在向导（不崩不退出）
 - `--watch` 透传：交互选中后 watch 行出现（沿用既有 watch 断言形态）
 - 三态/B4 在预览之前问完：断言 `select` 调用发生在 `confirm` 之前（顺序断言）
+- **S10 追加**：「快捷」组两项的出现条件 / N 口径（渲染期不做注册表过滤）/ 勾选后展开与失效名字剔除 / 虚拟项触发的 last 刷新（仅 1 个也刷新）
 
 **`tests/unit/unlink-interactive.test.ts`（新）**
 - 无参数 + 非 TTY → 提示 + exit 1，零菜单调用

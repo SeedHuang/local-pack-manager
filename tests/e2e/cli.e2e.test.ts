@@ -460,3 +460,53 @@ describe('lpm link / unlink 无参数 e2e（S9）', () => {
     expect(r.stdout).not.toContain('│')
   })
 })
+
+// S10：`lpm save` 错误路径（需要 workspace fixture——`findWorkspaceRoot` 在裸目录会先报错）
+describe('lpm save e2e（S10）', () => {
+  const made: string[] = []
+  function makeProject(files: Record<string, string> = {}): string {
+    const dir = mkdtempSync(join(tmpdir(), 'lpm-e2e-save-'))
+    made.push(dir)
+    const full: Record<string, string> = { 'package.json': JSON.stringify({ name: 'proj' }), ...files }
+    for (const [name, content] of Object.entries(full)) writeFileSync(join(dir, name), content, 'utf8')
+    return dir
+  }
+  afterEach(() => { while (made.length > 0) rmSync(made.pop() as string, { recursive: true, force: true }) })
+
+  it('E2E-S10-5：save 无已链接 → exit 1 + 提示', async () => {
+    const dir = makeProject()
+    const r = await runCli(['save', 'x'], dir)
+    expect(r.exitCode).toBe(1)
+    expect(r.stderr).toContain('当前没有任何已链接的库')
+  })
+
+  it('E2E-S10-4：preset 非 TTY → exit 1 + 提示 + 无菜单残片', async () => {
+    const dir = makeProject({ 'lpm.config.json': JSON.stringify({ version: 1, libs: {}, presets: { a: ['@t/a'] } }) })
+    const r = await runCli(['preset'], dir)
+    expect(r.exitCode).toBe(1)
+    expect(r.stdout).toContain('当前不是交互终端；直通用法：lpm preset rm <名>')
+    expect(r.stdout).not.toContain('已删除预设')
+  })
+
+  it('E2E-S10-1：link --last 无记录 → exit 1 + 提示（且不含 lpm save 字样）', async () => {
+    const dir = makeProject({ 'lpm.config.json': JSON.stringify({ version: 1, packageManager: 'pnpm', libs: {} }) })
+    const r = await runCli(['link', '--last'], dir)
+    expect(r.exitCode).toBe(1)
+    expect(r.stderr).toContain('没有上次链接的记录')
+    expect(r.stderr).not.toContain('lpm save')
+  })
+
+  it('E2E-S10-2：link --preset nope → exit 1 + 提示', async () => {
+    const dir = makeProject({ 'lpm.config.json': JSON.stringify({ version: 1, packageManager: 'pnpm', libs: {} }) })
+    const r = await runCli(['link', '--preset', 'nope'], dir)
+    expect(r.exitCode).toBe(1)
+    expect(r.stderr).toContain('预设不存在：nope')
+  })
+
+  it('E2E-S10-3：link --all --last → exit 1 + 互斥提示', async () => {
+    const dir = makeProject({ 'lpm.config.json': JSON.stringify({ version: 1, packageManager: 'pnpm', libs: {} }) })
+    const r = await runCli(['link', '--all', '--last'], dir)
+    expect(r.exitCode).toBe(1)
+    expect(r.stderr).toContain('三者互斥')
+  })
+})

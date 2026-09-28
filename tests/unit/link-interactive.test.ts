@@ -374,3 +374,178 @@ describe('link 交互入口', () => {
     expect(cap.out.join('')).toContain('未选择任何库')
   })
 })
+
+function writeLast(ws: string, names: string[]): void {
+  mkdirSync(join(ws, '.lpm'), { recursive: true })
+  writeFileSync(join(ws, '.lpm', 'last.json'), JSON.stringify({ version: 1, names }), 'utf8')
+}
+function shortcutOpts(): Array<{ value: string; label: string; hint?: string }> {
+  const arg = vi.mocked(groupMultiselect).mock.calls[0]![0] as { options: Record<string, Array<{ value: string; label: string; hint?: string }>> }
+  return arg.options['快捷'] ?? []
+}
+
+describe('link 主列表「快捷」组（spec §4.10）', () => {
+  it('VI-1：有注册 + 有 last → 两项都在；勾「全部已注册」→ 展开全部注册键', async () => {
+    const libA = makeLib('@t/a')
+    const libB = makeLib('@t/b')
+    const ws = makeWs({ 'apps/web/package.json': JSON.stringify({ name: 'web', dependencies: { '@t/a': '^1.0.0', '@t/b': '^1.0.0' } }) })
+    registerLib(ws, '@t/a', libA)
+    registerLib(ws, '@t/b', libB)
+    writeLast(ws, ['@t/a'])
+    stubTty(true); makeHome()
+    const ALL = '\u0000__all_registered__'
+    vi.mocked(groupMultiselect).mockResolvedValueOnce([ALL] as never)
+    vi.mocked(confirm).mockResolvedValueOnce(true as never)
+    vi.mocked(execa).mockResolvedValue({ exitCode: 0 } as never)
+    const cap = captureOut()
+    expect(await runLink([], {}, ws)).toBe(0)
+    expect(shortcutOpts().map((o) => o.value)).toEqual([ALL, '\u0000__last__'])
+    expect(shortcutOpts()[0]!.label).toContain('全部已注册（2）')
+    expect(shortcutOpts()[1]!.label).toContain('上次链接的（1）')
+    expect(cap.out.join('')).toContain('执行计划预览：')
+    const pkg = JSON.parse(readFileSync(join(ws, 'apps/web/package.json'), 'utf8'))
+    expect(pkg.dependencies['@t/a']).toContain('link:')
+    expect(pkg.dependencies['@t/b']).toContain('link:')
+  })
+
+  it('VI-2：无 last.json → 「上次链接的」不出现，仅「全部已注册」', async () => {
+    const libA = makeLib('@t/a')
+    const ws = makeWs({ 'apps/web/package.json': JSON.stringify({ name: 'web', dependencies: { '@t/a': '^1.0.0' } }) })
+    registerLib(ws, '@t/a', libA)
+    stubTty(true); makeHome()
+    vi.mocked(groupMultiselect).mockResolvedValueOnce(['@t/a'] as never)
+    vi.mocked(confirm).mockResolvedValueOnce(false as never)
+    captureOut()
+    expect(await runLink([], {}, ws)).toBe(1)
+    expect(shortcutOpts().map((o) => o.label)).toEqual(['全部已注册（1）'])
+  })
+
+  it('VI-3：N 的口径 = 渲染期长度（不过滤失效名字）', async () => {
+    const libA = makeLib('@t/a')
+    const ws = makeWs({ 'apps/web/package.json': JSON.stringify({ name: 'web', dependencies: { '@t/a': '^1.0.0' } }) })
+    registerLib(ws, '@t/a', libA)
+    writeLast(ws, ['@t/a', '@t/gone'])
+    stubTty(true); makeHome()
+    vi.mocked(groupMultiselect).mockResolvedValueOnce(['@t/a'] as never)
+    vi.mocked(confirm).mockResolvedValueOnce(false as never)
+    captureOut()
+    expect(await runLink([], {}, ws)).toBe(1)
+    expect(shortcutOpts()[1]!.label).toContain('上次链接的（2）')
+  })
+
+  it('VI-4：勾「上次链接的」含失效名字 → 逐行剔除提示 + 其余照常 + 不报错', async () => {
+    const libA = makeLib('@t/a')
+    const ws = makeWs({ 'apps/web/package.json': JSON.stringify({ name: 'web', dependencies: { '@t/a': '^1.0.0' } }) })
+    registerLib(ws, '@t/a', libA)
+    writeLast(ws, ['@t/a', '@t/gone'])
+    stubTty(true); makeHome()
+    vi.mocked(groupMultiselect).mockResolvedValueOnce(['\u0000__last__'] as never)
+    vi.mocked(confirm).mockResolvedValueOnce(true as never)
+    vi.mocked(execa).mockResolvedValue({ exitCode: 0 } as never)
+    const cap = captureOut()
+    expect(await runLink([], {}, ws)).toBe(0)
+    expect(cap.out.join('')).toContain('⚠️ @t/gone 已不在注册表，已跳过')
+    expect(JSON.parse(readFileSync(join(ws, 'apps/web/package.json'), 'utf8')).dependencies['@t/a']).toContain('link:')
+  })
+
+  it('VI-5：虚拟项触发的 last 刷新（展开后仅 1 个也刷新）', async () => {
+    const libA = makeLib('@t/a')
+    const ws = makeWs({ 'apps/web/package.json': JSON.stringify({ name: 'web', dependencies: { '@t/a': '^1.0.0' } }) })
+    registerLib(ws, '@t/a', libA)
+    // 判别力（T6 评审 Important-1）：初始 last 含一个「将在展开期被剔除」的 @t/gone——
+    // 无 forceLastWrite 传导时 targets 过滤后 =1 < 2 不刷新，终态会是 ['@t/a','@t/gone']；传导后才收敛为 ['@t/a']
+    writeLast(ws, ['@t/a', '@t/gone'])
+    stubTty(true); makeHome()
+    vi.mocked(groupMultiselect).mockResolvedValueOnce(['\u0000__last__'] as never)
+    vi.mocked(confirm).mockResolvedValueOnce(true as never)
+    vi.mocked(execa).mockResolvedValue({ exitCode: 0 } as never)
+    captureOut()
+    expect(await runLink([], {}, ws)).toBe(0)
+    expect(JSON.parse(readFileSync(join(ws, '.lpm', 'last.json'), 'utf8')).names).toEqual(['@t/a'])
+  })
+
+  it('VI-6：无注册且无 last（空态）→ 不进主列表、无「快捷」组', async () => {
+    const ws = makeWs({ 'lpm.config.json': JSON.stringify({ version: 1, packageManager: 'pnpm', libs: {} }) })
+    stubTty(true); makeHome()
+    vi.mocked(select).mockResolvedValueOnce('quit')
+    captureOut()
+    expect(await runLink([], {}, ws)).toBe(0)
+    expect(groupMultiselect).not.toHaveBeenCalled()
+    expect(select).toHaveBeenCalled()   // 走的是空态向导，不是主列表
+  })
+
+  it('VI-7：有「扫描发现」但无注册、无 last → 主列表仍出现，但无「快捷」组', async () => {
+    const scan = join(mkdtempSync(join(tmpdir(), 'lpm-scan-')), 'x')
+    dirs.push(join(scan, '..'))
+    mkdirSync(join(scan, 'lib-x'), { recursive: true })
+    writeFileSync(join(scan, 'lib-x', 'package.json'), JSON.stringify({ name: '@t/found' }), 'utf8')
+    const ws = makeWs({ 'lpm.config.json': JSON.stringify({ version: 1, packageManager: 'pnpm', libs: {} }) })
+    stubTty(true)
+    const home = makeHome()
+    writeFileSync(join(home, '.lpm', 'config.json'), JSON.stringify({ version: 1, scanDirs: [scan] }), 'utf8')
+    vi.mocked(groupMultiselect).mockResolvedValueOnce([] as never)
+    captureOut()
+    expect(await runLink([], {}, ws)).toBe(1)              // 空选中 → exit 1
+    const arg = vi.mocked(groupMultiselect).mock.calls[0]![0] as { options: Record<string, unknown> }
+    expect(arg.options['快捷']).toBeUndefined()
+    expect(arg.options['扫描发现（1）']).toBeDefined()
+  })
+
+  it('VI-8：交互勾选 ≥ 2 个普通项 → last 刷新（S10 只补断言，代码未改）', async () => {
+    const libA = makeLib('@t/a')
+    const libB = makeLib('@t/b')
+    const ws = makeWs({ 'apps/web/package.json': JSON.stringify({ name: 'web', dependencies: { '@t/a': '^1.0.0', '@t/b': '^1.0.0' } }) })
+    registerLib(ws, '@t/a', libA)
+    registerLib(ws, '@t/b', libB)
+    stubTty(true); makeHome()
+    vi.mocked(groupMultiselect).mockResolvedValueOnce(['@t/a', '@t/b'] as never)
+    vi.mocked(confirm).mockResolvedValueOnce(true as never)
+    vi.mocked(execa).mockResolvedValue({ exitCode: 0 } as never)
+    captureOut()
+    expect(await runLink([], {}, ws)).toBe(0)
+    const last = JSON.parse(readFileSync(join(ws, '.lpm', 'last.json'), 'utf8')) as { names: string[] }
+    expect([...last.names].sort()).toEqual(['@t/a', '@t/b'])
+  })
+
+  it('VI-9：虚拟项 + 手勾普通项混选 → 去重后只链一次', async () => {
+    const libA = makeLib('@t/a')
+    const libB = makeLib('@t/b')
+    const ws = makeWs({ 'apps/web/package.json': JSON.stringify({ name: 'web', dependencies: { '@t/a': '^1.0.0', '@t/b': '^1.0.0' } }) })
+    registerLib(ws, '@t/a', libA)
+    registerLib(ws, '@t/b', libB)
+    writeLast(ws, ['@t/a'])
+    stubTty(true); makeHome()
+    // 同时勾「全部已注册」「上次链接的」与重复的普通项 @t/a
+    vi.mocked(groupMultiselect).mockResolvedValueOnce(['\u0000__all_registered__', '@t/a', '\u0000__last__'] as never)
+    vi.mocked(confirm).mockResolvedValueOnce(true as never)
+    vi.mocked(execa).mockResolvedValue({ exitCode: 0 } as never)
+    const cap = captureOut()
+    expect(await runLink([], {}, ws)).toBe(0)
+    expect(execa).toHaveBeenCalledTimes(1)                                  // install 恰一次
+    const out = cap.out.join('')
+    expect(out.match(/改写 apps\/web\/package\.json:/g)?.length).toBe(1)     // 同一 manifest 只列一段
+    expect(out).not.toContain('已链接跳过：')                                // 去重后不该出现「已链接跳过」
+  })
+
+  it('VI-10：虚拟项「全部命中已链接、跳过」→ 空计划也把 last 对齐全集（spec §4.6 表 #3）', async () => {
+    const libA = makeLib('@t/a')
+    const libB = makeLib('@t/b')
+    const ws = makeWs({ 'apps/web/package.json': JSON.stringify({ name: 'web', dependencies: { '@t/a': '^1.0.0', '@t/b': '^1.0.0' } }) })
+    registerLib(ws, '@t/a', libA)
+    registerLib(ws, '@t/b', libB)
+    writeLast(ws, ['@t/a'])   // 顺带建出 .lpm/ 目录
+    // state 预置：@t/a 与 @t/b 都已链接 → 勾「上次链接的」展开后只有 @t/a，已链接 → 全跳过、计划为空
+    writeFileSync(join(ws, '.lpm', 'state.json'), JSON.stringify({ version: 1, links: {
+      '@t/a': { original: { 'apps/web/package.json': '^1.0.0' }, linkedAt: '2026-01-01T00:00:00.000Z' },
+      '@t/b': { original: { 'apps/web/package.json': '^1.0.0' }, linkedAt: '2026-01-01T00:00:00.000Z' },
+    } }), 'utf8')
+    stubTty(true); makeHome()
+    vi.mocked(groupMultiselect).mockResolvedValueOnce(['\u0000__last__'] as never)
+    const cap = captureOut()
+    expect(await runLink([], {}, ws)).toBe(0)
+    expect(confirm).not.toHaveBeenCalled()                                   // 空计划不进确认
+    expect(cap.out.join('')).toContain('无待执行变更')
+    // 判别力（最终评审 Important-1）：不加修复时交互空计划分支不写 last，终态仍是 ['@t/a']，此断言必红
+    expect(JSON.parse(readFileSync(join(ws, '.lpm', 'last.json'), 'utf8')).names).toEqual(['@t/a', '@t/b'])
+  })
+})

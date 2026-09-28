@@ -7,6 +7,7 @@ import { runLink } from './commands/link.js'
 import { runUnlink } from './commands/unlink.js'
 import { runStatus } from './commands/status.js'
 import { runRepair } from './commands/repair.js'
+import { runPreset, runSave } from './commands/preset.js'
 import { runUse } from './commands/use.js'
 import { LPM_VERSION } from './version.js'
 
@@ -34,7 +35,10 @@ export function buildProgram(): Command {
         .argument('[targets...]', '注册名或路径')
         .option('--watch', '链接后拉起 lib 的 build:watch 子进程')
         .option('--dry-run', '仅打印执行计划，不落盘不执行')
-        .action(async (targets: string[], options: { watch?: boolean; dryRun?: boolean }) => {
+        .option('--last', '链接 last.json 记录的那一批')
+        .option('--all', '链接全部已注册的 lib')
+        .option('--preset <名>', '链接指定预设')
+        .action(async (targets: string[], options: { watch?: boolean; dryRun?: boolean; last?: boolean; all?: boolean; preset?: string }) => {
           process.exitCode = await runLink(targets, options)
         })
       continue
@@ -73,6 +77,29 @@ export function buildProgram(): Command {
         .allowExcessArguments(false)
         .action(async (options: { dryRun?: boolean }) => {
           process.exitCode = await runRepair(options)
+        })
+      continue
+    }
+    // S10：save 直通接线（description 不带计划后缀）
+    if (meta.name === 'save') {
+      program
+        .command(meta.name)
+        .description(meta.summary)
+        .argument('<预设名>', '预设名')
+        .allowExcessArguments(false)
+        .action(async (name: string) => {
+          process.exitCode = await runSave(name)
+        })
+      continue
+    }
+    // S10：preset 接线（无参数 → 交互列表管理；rm <名> → 直通删除）
+    if (meta.name === 'preset') {
+      program
+        .command(meta.name)
+        .description(meta.summary)
+        .argument('[args...]', 'rm <名>')
+        .action(async (args: string[]) => {
+          process.exitCode = await runPreset(args)
         })
       continue
     }

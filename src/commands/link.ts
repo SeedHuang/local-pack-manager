@@ -22,6 +22,7 @@ import {
   LpmConfigParseError,
   LpmStateParseError,
   buildRunTrace,
+  readLast,
   readProjectConfig,
   readState,
   readUserConfig,
@@ -35,8 +36,18 @@ import { writeTextFileAtomic } from '../state/atomic.js'
 import type { LastRunTrace, LinkState, ProjectLpmConfig } from '../state/types.js'
 import { traceFailure } from './run-trace.js'
 import { renderPlan, type PlanEntry, type PlanView } from './plan-view.js'
+import { PresetError, readPresets } from './preset.js'
 
-export interface LinkOptions { watch?: boolean; dryRun?: boolean }
+export interface LinkOptions {
+  watch?: boolean
+  dryRun?: boolean
+  /** S10：链接 last.json 记录的集合（与 all / preset 三者互斥，且不与位置参数同用） */
+  last?: boolean
+  /** S10：链接全部已注册的 lib（`Object.keys(cfg.libs)`） */
+  all?: boolean
+  /** S10：链接指定预设；空串等同非法（spec §4.5） */
+  preset?: string
+}
 
 export class LinkArgumentError extends Error {
   constructor(public target: string, message: string) {
@@ -338,7 +349,7 @@ function reportError(err: unknown): number {
     PMAmbiguousError, PMUnresolvedError,
     LpmConfigParseError, LpmStateParseError,
     LibCheckError, LinkArgumentError, LinkInteractionError, LinkTargetError,
-    ProtocolPathError, InstallError,
+    ProtocolPathError, InstallError, PresetError,
   ]
   if (KNOWN.some((k) => err instanceof k)) {
     process.stderr.write(`${(err as Error).message}\n`)
@@ -368,6 +379,8 @@ interface LinkPlan {
   pruned: string[]
   /** S9 交互入口：config upsert 延后到执行期（直通恒 false——计划期已写；见 buildLinkPlan D-upsert 分流） */
   deferredRegistration: boolean
+  /** S10：集合级操作（--last / --all / --preset）为 true → last 刷新不受「target 数 ≥ 2」限制 */
+  forceLastWrite: boolean
 }
 
 /** 统一前置（两入口共用同一次）：A5 workspace → loadWorkspace → readProjectConfig → A4 PM；「检测到包管理器」打印留此 */
@@ -383,6 +396,64 @@ async function linkPreflight(cwd: string): Promise<{ rootDir: string; ws: Worksp
     process.stdout.write(`检测到包管理器：${pm}（未 lpm use 固化）\n`)
   }
   return { rootDir, ws, cfg, pm }
+}
+
+/** S10 集合来源解析（spec §4.4）：展开 + 两类预检（名字在注册表？注册值是字符串？）——都在任何写盘之前 */
+async function resolveLinkCollection(
+  opts: LinkOptions, cfg: ProjectLpmConfig | null, rootDir: string,
+): Promise<{ names: string[]; source: 'last' | 'all' | 'preset' }> {
+  const libs: Record<string, unknown> = cfg?.libs ?? {}
+  let names: readonly unknown[]
+  let source: 'last' | 'all' | 'preset'
+  if (opts.all === true) {
+    names = Object.keys(libs)
+    source = 'all'
+    if (names.length === 0) {
+      throw new LinkArgumentError('', '当前没有任何已注册的 lib。先 lpm link <路径> 注册')
+    }
+  } else if (opts.last === true) {
+    const last = await readLast(rootDir)
+    names = last?.names ?? []
+    source = 'last'
+    if (names.length === 0) {
+      throw new LinkArgumentError('', '没有上次链接的记录。先做一次批量 link（一次给 ≥ 2 个目标、或 --all / --preset）建立记录')
+    }
+  } else {
+    const name = opts.preset as string
+    const view = readPresets(cfg)
+    if (view.corrupt.includes(name)) {
+      throw new LinkArgumentError('', `预设 ${name} 内容损坏（应为字符串数组）。可 lpm preset rm ${name} 删除后重存`)
+    }
+    if (!Object.hasOwn(view.raw, name)) {
+      const avail = Object.keys(view.raw)
+      throw new LinkArgumentError('', avail.length === 0
+        ? `预设不存在：${name}。当前没有任何预设。先 lpm save <名字>`
+        : `预设不存在：${name}。可用预设：${avail.join('、')}`)
+    }
+    names = view.entries[name] ?? []
+    source = 'preset'
+    if (names.length === 0) {
+      throw new LinkArgumentError('', `预设 ${name} 是空的。先 lpm save ${name} 写入内容`)
+    }
+  }
+  const missing: string[] = []
+  const corrupt: string[] = []
+  for (const n of names) {
+    const key = String(n)
+    if (!Object.hasOwn(libs, key)) missing.push(key)
+    else if (typeof libs[key] !== 'string') corrupt.push(key)
+  }
+  if (missing.length > 0 || corrupt.length > 0) {
+    const parts: string[] = []
+    if (missing.length > 0) parts.push(`${missing.length} 个名字已不在注册表：${missing.join('、')}`)
+    if (corrupt.length > 0) parts.push(`${corrupt.length} 个名字的注册值损坏（应为字符串）：${corrupt.join('、')}`)
+    const where = source === 'preset' ? `预设 ${opts.preset}` : source === 'last' ? '上次链接的记录' : '--all 的注册表'
+    const hints = source === 'preset'
+      ? `\n  用路径重新注册：lpm link <lib 路径>\n  或修掉这个预设：lpm preset rm ${opts.preset} 后重新 lpm save ${opts.preset}`
+      : '\n  用路径重新注册：lpm link <lib 路径>'
+    throw new LinkArgumentError('', `${where}里有${parts.join('；')}。${hints}`)
+  }
+  return { names: names.map((n) => String(n)), source }
 }
 
 /** 计划构建（统一前置判定）：把原 runLink 的 A2–A5 + 计划构建整体搬入。
@@ -401,6 +472,8 @@ async function buildLinkPlan(args: {
   pruneZeroHit?: boolean
   /** 交互入口传 true：config upsert 延后到 executeLinkPlan；直通不传（计划期写，保持原行为） */
   deferRegistration?: boolean
+  /** S10：集合级操作为 true（spec §4.6 表 #1/#3） */
+  forceLastWrite?: boolean
 }): Promise<LinkPlan> {
   const { targets, opts, rootDir, cwd, ws, pm, traceChanges, traceInstalls } = args
   let cfg = args.cfg
@@ -550,7 +623,7 @@ async function buildLinkPlan(args: {
   // ── 汇总出口 ──
   const totalChanged = [...aggregated.values()].reduce((s, e) => s + e.changedCount, 0)
   const skippedTotal = planSkipped.length + planAbandoned.length + dedupSkipped + unchangedTotal
-  return { rootDir, pm, cfg, st, targets, aggregated, planUpserts, planSkipped, planAbandoned, peerWarn, linkedTargets, pendingLinks, totalChanged, skippedTotal, traceChanges, traceInstalls, pruned, deferredRegistration: args.deferRegistration === true }
+  return { rootDir, pm, cfg, st, targets, aggregated, planUpserts, planSkipped, planAbandoned, peerWarn, linkedTargets, pendingLinks, totalChanged, skippedTotal, traceChanges, traceInstalls, pruned, deferredRegistration: args.deferRegistration === true, forceLastWrite: args.forceLastWrite === true }
 }
 
 /** 把计划渲染成共享视图（行序 = 既有 dry-run 行序，逐字兼容 spec §4.4） */
@@ -612,8 +685,8 @@ async function executeLinkPlan(plan: LinkPlan, opts: LinkOptions): Promise<numbe
   await runInstall(rootDir, pm)
   traceInstalls.push({ command: buildInstallCommandLine(pm), ok: true, exitCode: 0 })
 
-  // I last（targets ≥ 2 且至少成功 1 个）
-  if (targets.length >= 2 && linkedTargets.length >= 1) {
+  // I last（S10：集合级操作一律刷新；直通沿用「targets ≥ 2 且至少成功 1 个」）
+  if ((plan.forceLastWrite || targets.length >= 2) && linkedTargets.length >= 1) {
     try {
       const fresh = await readState(rootDir)
       await writeLast(rootDir, { version: 1, names: Object.keys(fresh?.links ?? {}) })
@@ -680,6 +753,9 @@ const CANCELLED = Symbol('cancelled')
 
 /** 「其他…」虚拟项的值（不会与真实包名冲突——包名不可能含 NUL） */
 const OTHER_OPTION = '\u0000__other__'
+/** S10 虚拟项哨兵（NUL 前缀，包名不可能含 NUL——沿用 OTHER_OPTION 惯例） */
+const ALL_REGISTERED = '\u0000__all_registered__'
+const LAST_LINKED = '\u0000__last__'
 const LINK_USAGE = 'lpm link <名字|路径>... [--watch] [--dry-run]'
 
 /** 手输路径：3 次重试（镜像 ternaryOriginal 的手动通道）；取消 → CANCELLED；耗尽 → [] */
@@ -734,11 +810,21 @@ async function addScanDir(): Promise<void> {
   }
 }
 
-/** 主列表多选（spec §4.5）：分组 + 「其他…」；返回 target 原文数组 */
+/** 主列表多选（spec §4.5 + §4.10）：快捷组（虚拟项）+ 分组 + 「其他…」；返回 targets 与「是否集合级操作」 */
 async function pickLinkTargets(
   cand: { registered: LinkCandidate[]; discovered: DiscoveredLib[] },
-): Promise<string[] | typeof CANCELLED> {
+  lastNames: readonly string[],
+): Promise<{ targets: string[]; collectionLevel: boolean } | typeof CANCELLED> {
   const groups: Record<string, Array<{ value: string; label: string; hint?: string }>> = {}
+  // S10「快捷」组：虚拟项（提交后展开并入勾选集合；本身不是最终 target）
+  const shortcuts: Array<{ value: string; label: string; hint?: string }> = []
+  if (cand.registered.length > 0) {
+    shortcuts.push({ value: ALL_REGISTERED, label: `全部已注册（${cand.registered.length}）`, hint: '一次勾选全部已注册的库' })
+  }
+  if (lastNames.length > 0) {
+    shortcuts.push({ value: LAST_LINKED, label: `上次链接的（${lastNames.length}）`, hint: '恢复 last.json 记录的那一批' })
+  }
+  if (shortcuts.length > 0) groups['快捷'] = shortcuts
   if (cand.registered.length > 0) {
     groups[`已注册（${cand.registered.length}）`] = cand.registered.map((c) => ({
       value: c.key,
@@ -765,14 +851,29 @@ async function pickLinkTargets(
 
   const picked = await clack.groupMultiselect({ message: '选择要链接的库（空格勾选，回车确认）', options: groups })
   if (clack.isCancel(picked)) return CANCELLED
-  const values = (picked as string[]).filter((v) => v !== OTHER_OPTION)
+  const pickedArr = picked as string[]
+  const collectionLevel = pickedArr.includes(ALL_REGISTERED) || pickedArr.includes(LAST_LINKED)
+  const registeredKeys = new Set(cand.registered.map((c) => c.key))
+  const values: string[] = []
+  if (pickedArr.includes(ALL_REGISTERED)) values.push(...cand.registered.map((c) => c.key))
+  if (pickedArr.includes(LAST_LINKED)) {
+    // 交互侧失效名字 = 前置剔除 + 提示（spec §4.10；直通侧是整批停——不对称是刻意的）
+    for (const n of lastNames) {
+      if (registeredKeys.has(n)) values.push(n)
+      else process.stdout.write(`⚠️ ${n} 已不在注册表，已跳过——请用路径重新注册\n`)
+    }
+  }
+  for (const v of pickedArr) {
+    if (v === ALL_REGISTERED || v === LAST_LINKED || v === OTHER_OPTION) continue
+    values.push(v)
+  }
   // 「其他…」不是最终勾选项：提交后若被勾选，先弹输入并把解析出的 target 并入（spec §4.5）
-  if ((picked as string[]).includes(OTHER_OPTION)) {
+  if (pickedArr.includes(OTHER_OPTION)) {
     const raws = await promptPaths()
     if (raws === CANCELLED) return CANCELLED
-    return [...values, ...raws]
+    values.push(...raws)
   }
-  return values
+  return { targets: values, collectionLevel }
 }
 
 /** 计划 → 预览 → 一次确认 → 执行（spec §4.4 / §4.11）；空态手输路径也走这里 */
@@ -782,6 +883,7 @@ async function runPlanAndExecute(
     opts: LinkOptions; rootDir: string; cwd: string; ws: Workspace; cfg: ProjectLpmConfig | null; pm: PackageManagerId
     st: LinkState | null; traceChanges: LastRunTrace['changes']; traceInstalls: LastRunTrace['installs']
   },
+  collectionLevel: boolean,
 ): Promise<number> {
   // 前置剔除（注册值损坏——纯本地判定、无副作用；spec §4.5）
   const keep: string[] = []
@@ -800,6 +902,7 @@ async function runPlanAndExecute(
   const plan = await buildLinkPlan({
     targets: keep, opts: ctx.opts, rootDir: ctx.rootDir, cwd: ctx.cwd, ws: ctx.ws, cfg: ctx.cfg, pm: ctx.pm, st: ctx.st,
     traceChanges: ctx.traceChanges, traceInstalls: ctx.traceInstalls, pruneZeroHit: true, deferRegistration: true,
+    forceLastWrite: collectionLevel,
   })
   for (const p of plan.pruned) process.stdout.write(`${p}\n`)
   const view = linkPlanView(plan, ctx.opts)
@@ -811,6 +914,16 @@ async function runPlanAndExecute(
     }
     process.stdout.write(renderPlan(view, 'preview'))
     process.stdout.write('  无待执行变更\n')
+    // S10 表 #3（spec §4.6 实现落点 3）：交互集合级操作即使全部命中「已链接、跳过」，
+    // 也把 last 对齐到当前 links 全集（与直通 runLink 空分支同形——失败仅警告）
+    if (collectionLevel === true) {
+      try {
+        const fresh = await readState(ctx.rootDir)
+        await writeLast(ctx.rootDir, { version: 1, names: Object.keys(fresh?.links ?? {}) })
+      } catch {
+        process.stderr.write('警告：last.json 写入失败（不影响链接）\n')
+      }
+    }
     return 0
   }
   if (ctx.opts.dryRun === true) {
@@ -845,15 +958,16 @@ async function runLinkInteractive(opts: LinkOptions, cwd: string): Promise<numbe
     traceRoot = rootDir
     tracePm = pm
     const st = await readState(rootDir)
+    const lastNames = (await readLast(rootDir))?.names ?? []
     for (;;) {
       const { scanDirs } = await readUserConfig() // 坏 JSON → LpmStateParseError 透传（spec §4.9）
       const cand = await collectLinkCandidates(rootDir, ws, cfg, st, scanDirs)
       if (cand.registered.length > 0 || cand.discovered.length > 0) {
         for (const n of cand.scanNotes) process.stdout.write(`${n}\n`)
-        const picked = await pickLinkTargets(cand)
+        const picked = await pickLinkTargets(cand, lastNames)
         if (picked === CANCELLED) { process.stdout.write('已取消\n'); return 1 }
-        if (picked.length === 0) { process.stdout.write('未选择任何库\n'); return 1 }
-        return await runPlanAndExecute(picked, { opts, rootDir, cwd, ws, cfg, pm, st, traceChanges, traceInstalls })
+        if (picked.targets.length === 0) { process.stdout.write('未选择任何库\n'); return 1 }
+        return await runPlanAndExecute(picked.targets, { opts, rootDir, cwd, ws, cfg, pm, st, traceChanges, traceInstalls }, picked.collectionLevel)
       }
       // 空态（两组皆空）→ 向导
       const step = await emptyStateWizard()
@@ -863,7 +977,7 @@ async function runLinkInteractive(opts: LinkOptions, cwd: string): Promise<numbe
       const raws = await promptPaths()
       if (raws === CANCELLED) { process.stdout.write('已取消\n'); return 1 }
       if (raws.length === 0) continue
-      return await runPlanAndExecute(raws, { opts, rootDir, cwd, ws, cfg, pm, st, traceChanges, traceInstalls })
+      return await runPlanAndExecute(raws, { opts, rootDir, cwd, ws, cfg, pm, st, traceChanges, traceInstalls }, false)
     }
   } catch (err) {
     if (opts.dryRun !== true && traceRoot !== null && tracePm !== null) {
@@ -878,8 +992,20 @@ async function runLinkInteractive(opts: LinkOptions, cwd: string): Promise<numbe
 }
 
 export async function runLink(targets: readonly string[], opts: LinkOptions, cwd: string = process.cwd()): Promise<number> {
-  // A1 无参数 → S9 交互入口（非 TTY 由入口内部拒绝，绝不进菜单）
-  if (targets.length === 0) return await runLinkInteractive(opts, cwd)
+  // S10 参数校验（spec §4.5）：顺序 = 三者互斥 → 与位置参数互斥 → 名为空；全部早于任何读盘
+  const switchCount = [opts.last === true, opts.all === true, opts.preset !== undefined].filter(Boolean).length
+  if (switchCount > 1) {
+    return reportError(new LinkArgumentError('', '--last / --all / --preset 三者互斥，请只用一个。用法：lpm link --last | --all | --preset <名>'))
+  }
+  const hasSwitch = switchCount === 1
+  if (targets.length > 0 && hasSwitch) {
+    return reportError(new LinkArgumentError('', '--last / --all / --preset 不能与 <名字|路径> 同时使用；要链接指定目标请直接给名字或路径'))
+  }
+  if (typeof opts.preset === 'string' && opts.preset.trim() === '') {
+    return reportError(new LinkArgumentError('', '--preset 需要一个预设名（用法：lpm link --preset <名>）'))
+  }
+  // A1 无参数（且无集合开关）→ S9 交互入口（非 TTY 由入口内部拒绝，绝不进菜单）
+  if (targets.length === 0 && !hasSwitch) return await runLinkInteractive(opts, cwd)
   // 运行留痕所需上下文（失败路径在 catch 中也要能定位 rootDir/pm）——S8 spec §4.6
   let traceRoot: string | null = null
   let tracePm: PackageManagerId | null = null
@@ -892,11 +1018,19 @@ export async function runLink(targets: readonly string[], opts: LinkOptions, cwd
     tracePm = pm
     // state 预读（幂等判定 + 合并写基线）
     const st = await readState(rootDir)
-    const plan = await buildLinkPlan({ targets, opts, rootDir, cwd, ws, cfg, pm, st, traceChanges, traceInstalls })
+    const effectiveTargets = hasSwitch ? (await resolveLinkCollection(opts, cfg, rootDir)).names : targets
+    const plan = await buildLinkPlan({ targets: effectiveTargets, opts, rootDir, cwd, ws, cfg, pm, st, traceChanges, traceInstalls, forceLastWrite: hasSwitch })
     if (plan.aggregated.size === 0) {
-      // 无改写：全已链接 / 全放弃（dry-run 下 abandon 不发生——E4 降级警告；此分支即「全部已链接」）
       if (opts.dryRun === true) {
         process.stdout.write('无待执行变更\n') // spec §4.4 K3：计划体为空 + 「无待执行变更」
+      } else if (hasSwitch) {
+        // S10 表 #2（spec §4.6 实现落点 2）：集合级操作即使全跳过，也把 last 对齐到当前 links 全集
+        try {
+          const fresh = await readState(rootDir)
+          await writeLast(rootDir, { version: 1, names: Object.keys(fresh?.links ?? {}) })
+        } catch {
+          process.stderr.write('警告：last.json 写入失败（不影响链接）\n')
+        }
       }
       return 0
     }
