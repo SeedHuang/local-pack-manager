@@ -276,7 +276,7 @@ function printInjectDiff(hostPath: string, beforeLines: string[], afterLines: st
 
 | # | 错误类 | 场景 | 描述 / 下一步 |
 |---|---|---|---|
-| I1 | `InitConfigNotFoundError` | 宿主配置文件未找到 | `未找到 umi 配置文件（已检查 config/config.ts、.umirc.ts、config/config.js、.umirc.js）。` / `请在含 umi 配置的项目目录运行 lpm init` |
+| I1 | `InitConfigNotFoundError` | 宿主配置文件未找到 | `未找到 umi 配置文件（已检查 config/config.ts、.umirc.ts、config/config.js、.umirc.js）：<cwd>。` / `请在含 umi 配置的项目目录运行 lpm init`（**OCR L5 修复波**：消息并入 cwd，便于定位扫描目录） |
 | I2 | `InitConfigShapeError` | 对象体无法定位 | `无法定位 umi 配置对象体。` / `确认配置文件以 export default defineConfig({ 或 export default { 开头` |
 | I3 | `InitRootError` | root 计算跨盘符/无公共祖先 | `无法计算 utoopack.root（跨盘符或无公共祖先）：lib=<libs 清单>。` / `将 lib 与宿主放到同一盘符、或调整目录结构后重试` |
 | I4 | `InitHostPkgError` | 宿主 package.json 缺失 | `未找到宿主 package.json：<cwd>。` / `确认在含 package.json 的项目目录运行 lpm init` |
@@ -402,5 +402,13 @@ function printInjectDiff(hostPath: string, beforeLines: string[], afterLines: st
   1. **alias 键无引号**：`buildFragment` 输出 `  ${k}: '${v}',`（键不带引号），与 plan Task 4 草案 `  '${k}': '${v}',` 不同——alias 目标以简单标识符为常，省引号更贴近 umi 惯例；golden 断言 `react: 'D:/h/node_modules/react'` 锁定。
   2. **单层缩进**（§8 自决 1 形态）：`injectFragment` 插入形态为 `'\n' + indented`（indented 每行 2 空格）；plan 草案 `'\n  ' + indented` 会造成双层（4 空格）缩进，实现期收敛为单层 2 空格，与 §3.1 示意一致。
   3. **byte 恒等仅无尾逗号宿主**（§6/§8 自决 1）：`removeFragment` 的 byte 往返恒等断言只在「宿主无尾逗号」fixture 上做；「宿主有尾逗号」fixture 断言语义等价（原尾逗号被消费）。
+
+### OCR 修复波裁定（用户提交 `8619bd1` 后执行，2026-09-29）
+
+- **OCR 轮结果**：diff 模式 `30a535a..8619bd1`，3 代码文件 / 14 意见 / 0 critical / 2 high / 3 medium / 9 low（~1.57M tokens / 3m10s；完整命令行与 Summary 落盘账本）。
+- **ADDRESSED（11）**：H1 alias 键加引号（`JS_IDENT_RE`，react-dom/@ant-design/icons 等非标识符包名）；H2 反引号模板字符串（`skipTemplate` + `${...}` 插值递归 + 共享 `skipIgnorable` dispatch 单源）；M1 `hasShadow` → `hasTopLevelKeys`（对象体深度 0 键扫描，注释/字符串/嵌套对象不误报）；M2 `buildAliasMap` 返回 `{ alias, skipped }` + `runInit` 打印「peer 已声明未安装」提示；M3 POSIX 公共前缀到根返回 `'/'`；L1/L2 死 import；L4 init 不完整标记报 I8（不再报 I6 指到会撞 I8 的 uninit）；L5 I1 消息并入 cwd（§5 表已同步）；L6 deps/devDeps 补 `!Array.isArray`；L8 扫描 dispatch 重复随 H2 合并。
+- **驳回（2）**：L3 `clack.isCancel(ok)` 冗余——与既有 repair/link 交互惯例一致（S9 spec §8.2 先例），保持；L9 BOM 写回——§8 自决 12 有意设计（与 S5 口径一致）。
+- **候选（1）**：L7 runInit/runUninit 编排重复抽 helper——触发信号 = 第三个对称命令出现。
+- **修复波后终态**：`pnpm verify` exit 0 = typecheck 0 + build + unit **34 文件 / 579 例**（573 + 6 新用例）+ e2e **1 文件 / 42 例**。改动（5 个 `M`）留待用户 commit。
 
 

@@ -6,9 +6,8 @@ import { ManifestParseError } from './workspace.js'
 
 export class InitConfigNotFoundError extends Error {
   constructor(cwd: string) {
-    super(`未找到 umi 配置文件（已检查 config/config.ts、.umirc.ts、config/config.js、.umirc.js）。\n下一步：请在含 umi 配置的项目目录运行 lpm init`)
+    super(`未找到 umi 配置文件（已检查 config/config.ts、.umirc.ts、config/config.js、.umirc.js）：${cwd}。\n下一步：请在含 umi 配置的项目目录运行 lpm init`)
     this.name = 'InitConfigNotFoundError'
-    void cwd
   }
 }
 export class InitConfigShapeError extends Error {
@@ -75,12 +74,40 @@ export function stripBom(source: string): string {
 }
 
 // ── 对象体定位（spec §4.4 + §8 自决 2）──
+/** 跳过普通字符串（' 或 "），返回闭引号后一位；不闭合 → 末尾（复用 rewriter closingQuote 思路） */
 function skipString(source: string, i: number): number {
   const quote = source[i]
   let j = i + 1
   while (j < source.length) {
     if (source[j] === '\\') { j += 2; continue }
     if (source[j] === quote) return j + 1
+    j++
+  }
+  return source.length
+}
+/** 跳过 ${...} 插值体（i 指向 '{'），括号配对 + 递归跳过字符串/模板/注释；不闭合 → 末尾 */
+function skipInterpolation(source: string, i: number): number {
+  let depth = 1
+  let j = i + 1
+  while (j < source.length) {
+    const ch = source[j]
+    if (ch === '"' || ch === "'") { j = skipString(source, j); continue }
+    if (ch === '`') { j = skipTemplate(source, j); continue }
+    if (ch === '/' && source[j + 1] === '/') { j = skipLineComment(source, j); continue }
+    if (ch === '/' && source[j + 1] === '*') { j = skipBlockComment(source, j); continue }
+    if (ch === '{') { depth++; j++; continue }
+    if (ch === '}') { depth--; if (depth === 0) return j + 1; j++; continue }
+    j++
+  }
+  return source.length
+}
+/** 跳过反引号模板字面量（含 ${...} 插值，递归），返回闭反引号后一位；不闭合 → 末尾（OCR H2） */
+function skipTemplate(source: string, i: number): number {
+  let j = i + 1
+  while (j < source.length) {
+    if (source[j] === '\\') { j += 2; continue }
+    if (source[j] === '$' && source[j + 1] === '{') { j = skipInterpolation(source, j + 1); continue }
+    if (source[j] === '`') return j + 1
     j++
   }
   return source.length
@@ -93,15 +120,23 @@ function skipBlockComment(source: string, i: number): number {
   const close = source.indexOf('*/', i + 2)
   return close === -1 ? source.length : close + 2
 }
-/** 从 from 起跳过字符串/注释，返回第一个 '{' 下标；无 → -1 */
+/** 共享跳过 dispatch（OCR H2 单一扫描原语，nextOpenBrace/matchCloseBrace 共用，防两处漂移）：
+ *  i 指向候选字符；命中字符串/模板/注释 → 返回跳过后的下标；否则原样返回 i */
+function skipIgnorable(source: string, i: number): number {
+  const ch = source[i]
+  if (ch === '"' || ch === "'") return skipString(source, i)
+  if (ch === '`') return skipTemplate(source, i)
+  if (ch === '/' && source[i + 1] === '/') return skipLineComment(source, i)
+  if (ch === '/' && source[i + 1] === '*') return skipBlockComment(source, i)
+  return i
+}
+/** 从 from 起跳过字符串/模板/注释，返回第一个 '{' 下标；无 → -1 */
 function nextOpenBrace(source: string, from: number): number {
   let i = from
   while (i < source.length) {
-    const ch = source[i]
-    if (ch === '"' || ch === "'") { i = skipString(source, i); continue }
-    if (ch === '/' && source[i + 1] === '/') { i = skipLineComment(source, i); continue }
-    if (ch === '/' && source[i + 1] === '*') { i = skipBlockComment(source, i); continue }
-    if (ch === '{') return i
+    const skipped = skipIgnorable(source, i)
+    if (skipped !== i) { i = skipped; continue }
+    if (source[i] === '{') return i
     i++
   }
   return -1
@@ -111,10 +146,9 @@ function matchCloseBrace(source: string, open: number): number {
   let depth = 0
   let i = open
   while (i < source.length) {
+    const skipped = skipIgnorable(source, i)
+    if (skipped !== i) { i = skipped; continue }
     const ch = source[i]
-    if (ch === '"' || ch === "'") { i = skipString(source, i); continue }
-    if (ch === '/' && source[i + 1] === '/') { i = skipLineComment(source, i); continue }
-    if (ch === '/' && source[i + 1] === '*') { i = skipBlockComment(source, i); continue }
     if (ch === '{') depth++
     else if (ch === '}') {
       depth--
@@ -138,6 +172,36 @@ export function locateConfigObject(source: string): { start: number; end: number
   const close = matchCloseBrace(source, open)
   if (close === -1) return null
   return { start: open, end: close }
+}
+
+/** 检测配置对象体的**顶层**键（OCR M1 遮蔽判定收紧）：locateConfigObject 定位对象体后，深度 0 扫键名。
+ *  只认对象体直接子键（嵌套对象/webpack resolve.alias/注释/字符串内的同名键不算）——替代 init.ts 原先的全文件子串扫描。 */
+export function hasTopLevelKeys(source: string, keys: readonly string[]): boolean {
+  const range = locateConfigObject(source)
+  if (range === null) return false
+  const body = source.slice(range.start + 1, range.end) // 对象体内容（不含外层 { }）
+  const keySet = new Set(keys)
+  let depth = 0
+  let i = 0
+  while (i < body.length) {
+    const skipped = skipIgnorable(body, i)
+    if (skipped !== i) { i = skipped; continue }
+    const ch = body[i]
+    if (ch === '{') { depth++; i++; continue }
+    if (ch === '}') { depth--; i++; continue }
+    if (depth === 0 && /[A-Za-z_$]/.test(ch)) {
+      let j = i
+      while (j < body.length && /[A-Za-z0-9_$]/.test(body[j] as string)) j++
+      const name = body.slice(i, j)
+      let k = j
+      while (k < body.length && /\s/.test(body[k] as string)) k++
+      if (body[k] === ':' && keySet.has(name)) return true
+      i = j
+      continue
+    }
+    i++
+  }
+  return false
 }
 
 // ── 标记检测（spec §4.8 自感知）──
@@ -164,6 +228,8 @@ export function commonAncestor(absPaths: string[]): string {
   // 公共前缀段数 n；首段即不同（跨盘符）→ 无祖先
   if (n === 0) return ''
   const joined = (first as string[]).slice(0, n).join('/')
+  // OCR M3：POSIX 公共前缀仅到根（首段为 ''）→ 公共祖先即文件系统根 '/'
+  if (joined === '') return '/'
   // Windows 盘符段（C:）需补成路径
   return /^[a-zA-Z]:$/.test(joined) ? `${joined}/` : joined
 }
@@ -183,11 +249,16 @@ export function buildRootValue(cwd: string, libDirs: string[]): string {
 }
 
 // ── 标记段注入 / 摘除（spec §4.4 文本级保真 + §8 自决 1 三态逗号）──
+const JS_IDENT_RE = /^[A-Za-z_$][A-Za-z0-9_$]*$/
 export function buildFragment(root: string, aliasMap: Record<string, string>): string {
   const lines: string[] = [INJECT_START, 'utoopack: {', `  root: '${root}',`, '},']
   if (Object.keys(aliasMap).length > 0) {
     lines.push('alias: {')
-    for (const [k, v] of Object.entries(aliasMap)) lines.push(`  ${k}: '${v}',`)
+    for (const [k, v] of Object.entries(aliasMap)) {
+      // OCR H1：包名可含连字符/scope（react-dom、@ant-design/icons 等），非法裸标识符必须加引号——否则产出语法错误的 umi 配置
+      const key = JS_IDENT_RE.test(k) ? k : `'${k}'`
+      lines.push(`  ${key}: '${v}',`)
+    }
     lines.push('},')
   }
   lines.push(INJECT_END)
@@ -226,7 +297,13 @@ export function readJsonSafe(filePath: string): Record<string, unknown> {
 }
 
 // ── peer dedupe alias 集合（spec §4.5 + §8 自决 4/5/11）──
-export function buildAliasMap(cwd: string, rootDir: string, libDirs: string[]): Record<string, string> {
+export interface AliasPlan {
+  alias: Record<string, string>
+  /** declared 但两处 node_modules 均未找到的 peer（spec §8 自决 11「跳过 + 提示」——由上层 runInit 打印提示，OCR M2） */
+  skipped: string[]
+}
+
+export function buildAliasMap(cwd: string, rootDir: string, libDirs: string[]): AliasPlan {
   const hostPkgPath = join(cwd, 'package.json')
   if (!existsSync(hostPkgPath)) throw new InitHostPkgError(cwd)
   let hostPkg: Record<string, unknown>
@@ -239,10 +316,12 @@ export function buildAliasMap(cwd: string, rootDir: string, libDirs: string[]): 
   const deps = hostPkg['dependencies']
   const devDeps = hostPkg['devDependencies']
   const hostDeps = new Set<string>([
-    ...(deps !== null && typeof deps === 'object' ? Object.keys(deps as Record<string, unknown>) : []),
-    ...(devDeps !== null && typeof devDeps === 'object' ? Object.keys(devDeps as Record<string, unknown>) : []),
+    // OCR L6：与 peers 守卫一致，数组型 dependencies/devDependencies 不入键集（否则 Object.keys 得数字下标）
+    ...(deps !== null && typeof deps === 'object' && !Array.isArray(deps) ? Object.keys(deps as Record<string, unknown>) : []),
+    ...(devDeps !== null && typeof devDeps === 'object' && !Array.isArray(devDeps) ? Object.keys(devDeps as Record<string, unknown>) : []),
   ])
   const alias: Record<string, string> = {}
+  const skipped: string[] = []
   for (const libDir of libDirs) {
     let libPkg: Record<string, unknown>
     try {
@@ -258,8 +337,9 @@ export function buildAliasMap(cwd: string, rootDir: string, libDirs: string[]): 
       if (existsSync(cwdPath)) { alias[peer] = cwdPath.replaceAll('\\', '/'); continue }
       const rootPath = join(rootDir, 'node_modules', peer)
       if (existsSync(rootPath)) { alias[peer] = rootPath.replaceAll('\\', '/'); continue }
-      // spec §8 自决 11：两者皆无 → 跳过 + 提示（declared 未安装，非 lpm 职责）
+      // spec §8 自决 11：两者皆无 → 跳过 + 提示（declared 未安装，非 lpm 职责）——OCR M2 收集进 skipped 交上层打印
+      skipped.push(peer)
     }
   }
-  return alias
+  return { alias, skipped }
 }

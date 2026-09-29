@@ -19,7 +19,7 @@ function makeDir(files: Record<string, string>): string {
 }
 function pkg(body: Record<string, unknown>): string { return JSON.stringify(body) }
 
-describe('buildAliasMap（spec §4.5 peer dedupe）', () => {
+describe('buildAliasMap（spec §4.5 peer dedupe，OCR M2 返回 { alias, skipped }）', () => {
   it('lib peer ∩ 宿主直接依赖 → 宿主实例绝对路径（正斜杠）', () => {
     const dir = makeDir({
       'package.json': pkg({ name: 'host', dependencies: { antd: '^5.0.0', react: '^18.0.0' } }),
@@ -27,23 +27,25 @@ describe('buildAliasMap（spec §4.5 peer dedupe）', () => {
       'node_modules/react/index.js': '// ok',
       'libs/a/package.json': pkg({ name: 'a', peerDependencies: { antd: '*', react: '*' } }),
     })
-    const alias = buildAliasMap(dir, dir, [join(dir, 'libs', 'a')])
+    const { alias } = buildAliasMap(dir, dir, [join(dir, 'libs', 'a')])
     expect(alias['antd']).toBe(join(dir, 'node_modules', 'antd').replaceAll('\\', '/'))
     expect(alias['react']).toBe(join(dir, 'node_modules', 'react').replaceAll('\\', '/'))
+    expect(buildAliasMap(dir, dir, [join(dir, 'libs', 'a')]).skipped).toEqual([])
   })
-  it('空交集 → {}', () => {
+  it('空交集 → alias {} + skipped []', () => {
     const dir = makeDir({
       'package.json': pkg({ name: 'host', dependencies: { antd: '^5.0.0' } }),
       'libs/a/package.json': pkg({ name: 'a', peerDependencies: { vue: '*' } }),
     })
-    expect(buildAliasMap(dir, dir, [join(dir, 'libs', 'a')])).toEqual({})
+    expect(buildAliasMap(dir, dir, [join(dir, 'libs', 'a')]).alias).toEqual({})
+    expect(buildAliasMap(dir, dir, [join(dir, 'libs', 'a')]).skipped).toEqual([])
   })
   it('lib 无 peerDependencies → 空', () => {
     const dir = makeDir({
       'package.json': pkg({ name: 'host', dependencies: { antd: '^5.0.0' } }),
       'libs/a/package.json': pkg({ name: 'a' }),
     })
-    expect(buildAliasMap(dir, dir, [join(dir, 'libs', 'a')])).toEqual({})
+    expect(buildAliasMap(dir, dir, [join(dir, 'libs', 'a')]).alias).toEqual({})
   })
   it('宿主 package.json 缺失 → InitHostPkgError', () => {
     const dir = makeDir({ 'libs/a/package.json': pkg({ name: 'a' }) })
@@ -55,7 +57,7 @@ describe('buildAliasMap（spec §4.5 peer dedupe）', () => {
       'node_modules/antd/index.js': '// ok',
       'libs/a/package.json': pkg({ name: 'a', peerDependencies: { antd: '*' } }),
     })
-    expect(buildAliasMap(dir, dir, [join(dir, 'libs', 'a')])['antd']).toBe(join(dir, 'node_modules', 'antd').replaceAll('\\', '/'))
+    expect(buildAliasMap(dir, dir, [join(dir, 'libs', 'a')]).alias['antd']).toBe(join(dir, 'node_modules', 'antd').replaceAll('\\', '/'))
   })
   it('peer 仅存在 workspace 根 node_modules（hoist 落点）→ 取 rootDir 路径（探测顺序 2）', () => {
     const root = makeDir({
@@ -66,14 +68,16 @@ describe('buildAliasMap（spec §4.5 peer dedupe）', () => {
     })
     const cwd = join(root, 'apps', 'web')
     mkdirSync(join(cwd, 'node_modules'), { recursive: true })
-    const alias = buildAliasMap(cwd, root, [join(root, 'libs', 'a')])
+    const { alias } = buildAliasMap(cwd, root, [join(root, 'libs', 'a')])
     expect(alias['antd']).toBe(join(root, 'node_modules', 'antd').replaceAll('\\', '/'))
   })
-  it('两者皆无 → 跳过该 peer（不进 alias）', () => {
+  it('两者皆无 → 跳过该 peer（不进 alias，进 skipped，OCR M2）', () => {
     const dir = makeDir({
       'package.json': pkg({ name: 'host', dependencies: { antd: '^5.0.0' } }),
       'libs/a/package.json': pkg({ name: 'a', peerDependencies: { antd: '*' } }),
     })
-    expect(buildAliasMap(dir, dir, [join(dir, 'libs', 'a')])).toEqual({})
+    const plan = buildAliasMap(dir, dir, [join(dir, 'libs', 'a')])
+    expect(plan.alias).toEqual({})
+    expect(plan.skipped).toEqual(['antd'])
   })
 })

@@ -6,6 +6,7 @@ import {
   InitConfigNotFoundError,
   findHostConfig,
   findMarker,
+  hasTopLevelKeys,
   locateConfigObject,
 } from '../../src/core/utoopack.js'
 
@@ -89,6 +90,33 @@ describe('locateConfigObject（spec §4.4 + §8 自决 2）', () => {
     const { start, end } = r as { start: number; end: number }
     expect(src[start]).toBe('{')
     expect(src[end]).toBe('}')
+  })
+  it('反引号模板字符串内括号/撇号不干扰（OCR H2）', () => {
+    const src = "export default defineConfig({ title: `Bob's {config}`, antd: {} })\n"
+    const r = locateConfigObject(src)
+    expect(r).not.toBeNull()
+    expect(src[(r as { start: number; end: number }).end]).toBe('}')
+  })
+  it('模板字符串 ${...} 插值内括号不干扰（OCR H2）', () => {
+    const src = "export default defineConfig({ title: `${a ? '{' : '}'}`, antd: {} })\n"
+    const r = locateConfigObject(src)
+    expect(r).not.toBeNull()
+    expect(src[(r as { start: number; end: number }).end]).toBe('}')
+  })
+})
+
+describe('hasTopLevelKeys（OCR M1：对象体顶层键遮蔽判定）', () => {
+  it('顶层有 utoopack 键 → true', () => {
+    const src = "export default defineConfig({ utoopack: { root: 'x' }, antd: {} })\n"
+    expect(hasTopLevelKeys(src, ['utoopack', 'alias'])).toBe(true)
+  })
+  it('嵌套对象内同名键不算（webpack resolve.alias）→ false', () => {
+    const src = "export default defineConfig({ chainWebpack: { resolve: { alias: {} } }, antd: {} })\n"
+    expect(hasTopLevelKeys(src, ['utoopack', 'alias'])).toBe(false)
+  })
+  it('注释/字符串内同名键不算 → false', () => {
+    const src = "export default defineConfig({ // alias 注释\n  title: 'alias 字样', antd: {} })\n"
+    expect(hasTopLevelKeys(src, ['utoopack', 'alias'])).toBe(false)
   })
 })
 

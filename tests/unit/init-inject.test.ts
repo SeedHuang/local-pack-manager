@@ -23,6 +23,11 @@ describe('buildFragment（spec §3.1）', () => {
     expect(f).toContain('utoopack:')
     expect(f).not.toContain('alias:')
   })
+  it('非标识符键名（连字符/scope）→ 加引号（OCR H1：react-dom、@ant-design/icons 是非法裸标识符）', () => {
+    const f = buildFragment('..', { 'react-dom': 'D:/h/node_modules/react-dom', '@ant-design/icons': 'D:/h/node_modules/@ant-design/icons' })
+    expect(f).toContain("'react-dom': 'D:/h/node_modules/react-dom'")
+    expect(f).toContain("'@ant-design/icons': 'D:/h/node_modules/@ant-design/icons'")
+  })
 })
 
 describe('injectFragment（spec §8 自决 1 三态）', () => {
