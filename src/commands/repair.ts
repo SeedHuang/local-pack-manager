@@ -36,15 +36,16 @@ import { ABANDON, ternaryOriginal } from './link.js'
 import { isLocalish, scanLinkState, type EntryScan, type FileScan } from './status.js'
 import { ESCAPE_HATCH } from './unlink.js'
 import { traceFailure } from './run-trace.js'
+import { reportError as reportKnownError } from './errors.js'
 
 // repair 六族自修复编排（S8 spec §4.5）。行为权威 = spec §4.5 + 裁决 11–16。
 // 写序（裁决 11）：声明改写 → install 恰一次 → 复验/--force → 档案对齐（state/config）→ 留痕。
 // 档案最后动：前三段失败 → 档案零改动 → 重跑收敛（崩溃安全）。
 
-export interface RepairOptions { dryRun?: boolean }
+interface RepairOptions { dryRun?: boolean }
 
 /** 存在待修项但无法交互（非 TTY）——唯一入口（spec §4.3） */
-export class RepairInteractionError extends Error {
+class RepairInteractionError extends Error {
   constructor(message: string) {
     super(message)
     this.name = 'RepairInteractionError'
@@ -62,6 +63,7 @@ class RepairCancelled extends Error {
 const REPAIR_RETRY_ADVICE = `state 已保留（档案未改动），重跑 lpm repair 会重新收敛；${ESCAPE_HATCH}`
 
 // 判定面单源（spec §9 自决 2）：isLocalish / BARE_PATH_RE 由 status.ts 提供，repair 经 import 复用
+// （isLocalish 判定落在 planOrphan / verifyAll 的 probe.status 分支，此处仅为协议前缀剥离工具）
 function stripProtocol(v: string): string { return v.replace(/^(link|file|portal):/, '') }
 function toRel(rootDir: string, abs: string): string { return relative(rootDir, abs).replaceAll('\\', '/') }
 function nmRelOf(rootDir: string, manifestPath: string, key: string): string {
@@ -474,11 +476,7 @@ function reportError(err: unknown): number {
     LpmConfigParseError, LpmStateParseError,
     ProtocolPathError, InstallError, RepairInteractionError,
   ]
-  if (KNOWN.some((k) => err instanceof k)) {
-    process.stderr.write(`${(err as Error).message}\n`)
-    return 1
-  }
-  throw err
+  return reportKnownError(err, KNOWN)
 }
 
 /** 退出码：0 完成（含无异常 / 仅提示）；1 失败或放弃 */

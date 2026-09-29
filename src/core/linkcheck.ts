@@ -1,5 +1,6 @@
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
 import { join, resolve } from 'node:path'
+import { isDirectory, stripBom } from '../util.js'
 
 // 前置检查（S6 spec §4.4 C；PRD §6.1 行 97 + §11 错误表；B5/B7 修复落点）。
 // 纯函数：无子进程、无状态层依赖；错误 message 首行即用户文案（S2 错误类惯例）。
@@ -29,10 +30,6 @@ export interface LibCheckOptions {
   expectWatchScript?: boolean    // --watch 时为 true
 }
 
-function isDirectory(p: string): boolean {
-  return existsSync(p) && statSync(p).isDirectory()
-}
-
 /** 剥 BOM 解析 lib package.json（§4.4 C3）；坏 JSON/根值非对象 → manifest-invalid */
 function readLibManifest(manifestPath: string, libDirAbs: string): Record<string, unknown> {
   let source: string
@@ -43,7 +40,7 @@ function readLibManifest(manifestPath: string, libDirAbs: string): Record<string
   }
   let parsed: unknown
   try {
-    parsed = JSON.parse(source.charCodeAt(0) === 0xfeff ? source.slice(1) : source)
+    parsed = JSON.parse(stripBom(source))
   } catch (e) {
     throw new LibCheckError('manifest-invalid', libDirAbs, `${manifestPath} 不是合法 JSON（${(e as Error).message}）。\n下一步：修正后重试`)
   }
@@ -115,7 +112,7 @@ export function checkLib(libDirAbs: string, opts: LibCheckOptions = {}): LibChec
   }
   const nmDir = join(libDirAbs, 'node_modules')
   let nmEmpty = true
-  if (existsSync(nmDir) && statSync(nmDir).isDirectory()) nmEmpty = readdirSync(nmDir).length === 0
+  if (isDirectory(nmDir)) nmEmpty = readdirSync(nmDir).length === 0
   if (nmEmpty) {
     throw new LibCheckError('node-modules-empty', libDirAbs, `${libDirAbs} 的 node_modules 为空。\n下一步：先在 ${libDirAbs} 执行包管理器 install`)
   }

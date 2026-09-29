@@ -2,7 +2,6 @@ import { Command, Argument, CommanderError } from 'commander'
 import { realpathSync } from 'node:fs'
 import { pathToFileURL } from 'node:url'
 import { COMMANDS } from './commands/registry.js'
-import { notImplemented } from './commands/stub.js'
 import { runLink } from './commands/link.js'
 import { runUnlink } from './commands/unlink.js'
 import { runStatus } from './commands/status.js'
@@ -189,10 +188,6 @@ export function buildProgram(): Command {
         })
       continue
     }
-    program
-      .command(meta.name)
-      .description(`${meta.summary}（计划 ${meta.plannedSpec}）`)
-      .action(() => notImplemented(meta))
   }
   return program
 }

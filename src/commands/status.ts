@@ -1,5 +1,6 @@
 import { readFileSync, realpathSync, statSync } from 'node:fs'
 import { dirname, join, relative } from 'node:path'
+import { stripBom } from '../util.js'
 import { PMAmbiguousError, PMUnresolvedError, resolvePackageManager, type PackageManagerId } from '../core/pm.js'
 import { probeNodeModules, type NmProbe } from '../core/nmcheck.js'
 import { LOCAL_PROTOCOL_RE, mapProtocol, readDepValues } from '../core/rewriter.js'
@@ -49,7 +50,7 @@ function toRel(rootDir: string, abs: string): string { return relative(rootDir, 
 /** 三依赖段全值（规范段序；同名多段全部保留） */
 function readAllDepValues(manifestPath: string): Map<string, string[]> {
   const raw = readFileSync(manifestPath, 'utf8')
-  const parsed = JSON.parse(raw.charCodeAt(0) === 0xfeff ? raw.slice(1) : raw) as Record<string, unknown>
+  const parsed = JSON.parse(stripBom(raw)) as Record<string, unknown>
   const out = new Map<string, string[]>()
   for (const s of DEP_SECTIONS) {
     const d = parsed[s]

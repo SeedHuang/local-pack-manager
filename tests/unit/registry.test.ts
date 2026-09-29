@@ -12,10 +12,9 @@ describe('命令注册表', () => {
     expect(new Set(COMMANDS.map((c) => c.name)).size).toBe(11)
   })
 
-  it('每项含中文 summary 与 plannedSpec', () => {
+  it('每项含中文 summary', () => {
     for (const c of COMMANDS) {
       expect(c.summary.length).toBeGreaterThan(0)
-      expect(c.plannedSpec).toMatch(/^S\d+/)
     }
   })
 })

@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { homedir } from 'node:os'
+import { stripBom } from '../util.js'
 import type { LastRunTrace, LastSet, LinkState, ProjectLpmConfig, UserLpmConfig } from './types.js'
 import { writeJsonFileAtomic } from './atomic.js'
 
@@ -48,7 +49,7 @@ function readLpmJson(
   fieldChecks: Array<{ field: string; kind: 'object' | 'array' }>,
   errOf: (filePath: string, message: string) => Error,
 ): Record<string, unknown> {
-  const stripped = raw.charCodeAt(0) === 0xfeff ? raw.slice(1) : raw
+  const stripped = stripBom(raw)
   let parsed: unknown
   try {
     parsed = JSON.parse(stripped)
@@ -197,7 +198,7 @@ export async function ensureGitignoreEntry(rootDir: string): Promise<'present' |
   if (existsSync(p)) {
     const raw = readFileSync(p, 'utf8')
     // 剥行首 UTF-8 BOM（记事本等工具常产生；lpm 家族读路径一致性——F4）
-    const stripped = raw.charCodeAt(0) === 0xfeff ? raw.slice(1) : raw
+    const stripped = stripBom(raw)
     const covered = stripped.split(/\r?\n/).some((line) => normalizeGitignoreLine(line) === '.lpm')
     if (covered) return 'present'
     const sep = raw.length === 0 || raw.endsWith('\n') ? '' : '\n'

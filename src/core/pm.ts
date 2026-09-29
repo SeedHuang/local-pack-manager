@@ -1,5 +1,6 @@
 import { closeSync, existsSync, openSync, readFileSync, readSync } from 'node:fs'
 import { join } from 'node:path'
+import { stripBom } from '../util.js'
 
 export type PackageManagerId = 'pnpm' | 'npm' | 'yarn-classic' | 'yarn-berry'
 
@@ -68,8 +69,7 @@ function readCorepackField(rootDir: string): { pm: PackageManagerId; raw: string
   let parsed: unknown
   try {
     const source = readFileSync(manifestPath, 'utf8')
-    const stripped = source.charCodeAt(0) === 0xfeff ? source.slice(1) : source
-    parsed = JSON.parse(stripped)
+    parsed = JSON.parse(stripBom(source))
   } catch {
     return null
   }

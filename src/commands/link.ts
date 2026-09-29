@@ -1,7 +1,8 @@
-import { existsSync, readFileSync, readdirSync, statSync, type Dirent } from 'node:fs'
+import { existsSync, readFileSync, readdirSync, type Dirent } from 'node:fs'
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import * as clack from '@clack/prompts'
 import { execa } from 'execa'
+import { isDirectory, stripBom } from '../util.js'
 import { LibCheckError, checkLib } from '../core/linkcheck.js'
 import { InstallError, buildInstallCommandLine, detectLibPM, pmExecutable, runInstall, spawnBuildWatch, type WatchProcess } from '../core/install.js'
 import { PMAmbiguousError, PMUnresolvedError, resolvePackageManager, type PackageManagerId } from '../core/pm.js'
@@ -36,9 +37,10 @@ import { writeTextFileAtomic } from '../state/atomic.js'
 import type { LastRunTrace, LinkState, ProjectLpmConfig } from '../state/types.js'
 import { traceFailure } from './run-trace.js'
 import { renderPlan, type PlanEntry, type PlanView } from './plan-view.js'
+import { reportError as reportKnownError } from './errors.js'
 import { PresetError, readPresets } from './preset.js'
 
-export interface LinkOptions {
+interface LinkOptions {
   watch?: boolean
   dryRun?: boolean
   /** S10：链接 last.json 记录的集合（与 all / preset 三者互斥，且不与位置参数同用） */
@@ -64,7 +66,7 @@ export class LinkInteractionError extends Error {
 }
 
 /** O5 零命中（<name> 不在任何成员依赖中）——计划期修订 4；OCR O3：字段 pkgName（name 被 Error.name 占用） */
-export class LinkTargetError extends Error {
+class LinkTargetError extends Error {
   constructor(public pkgName: string, message: string) {
     super(message)
     this.name = 'LinkTargetError'
@@ -79,7 +81,7 @@ export class LinkCancelledError extends Error {
   }
 }
 
-export interface ResolvedTarget { key: string; libDirAbs: string; source: 'name' | 'path' }
+interface ResolvedTarget { key: string; libDirAbs: string; source: 'name' | 'path' }
 interface RewriteHit { manifestPath: string; pkgName: string; targetValue: string; fromValue: string; section: string }
 interface FileAgg { content: string; hits: RewriteHit[]; changedCount: number }
 interface LinkedTarget { libDirAbs: string; rel: string }
@@ -88,14 +90,10 @@ function toRel(rootDir: string, abs: string): string {
   return relative(rootDir, abs).replaceAll('\\', '/')
 }
 
-function isDirectory(p: string): boolean {
-  return existsSync(p) && statSync(p).isDirectory()
-}
-
 /** JSON.parse 级提取（HEAD 文本/宽松场景）——original 值获取用（与 S5 文本级引擎解耦，恢复值语义等价） */
 function extractValueFromManifestText(source: string, pkgName: string): string | null {
   try {
-    const parsed = JSON.parse(source.charCodeAt(0) === 0xfeff ? source.slice(1) : source) as Record<string, unknown>
+    const parsed = JSON.parse(stripBom(source)) as Record<string, unknown>
     for (const section of ['dependencies', 'devDependencies', 'optionalDependencies']) {
       const deps = parsed[section]
       if (deps !== null && typeof deps === 'object' && !Array.isArray(deps)) {
@@ -278,7 +276,7 @@ export function parsePathInput(raw: string): string[] {
 }
 
 export interface LinkCandidate { key: string; rel: string; hitMembers: string[]; linked: boolean; cfgIntact: boolean }
-export interface DiscoveredLib { key: string; dirAbs: string; dirLabel: string; hitMembers: string[] }
+interface DiscoveredLib { key: string; dirAbs: string; dirLabel: string; hitMembers: string[] }
 
 /** 该库被哪些成员声明（相对根路径标签；只读快照，仅供排序与标记——spec §8 自决 10） */
 async function hitMembersOf(rootDir: string, ws: Workspace, key: string): Promise<string[]> {
@@ -290,7 +288,7 @@ async function hitMembersOf(rootDir: string, ws: Workspace, key: string): Promis
 function readPkgName(dirAbs: string): string | null {
   try {
     const raw = readFileSync(join(dirAbs, 'package.json'), 'utf8')
-    const parsed = JSON.parse(raw.charCodeAt(0) === 0xfeff ? raw.slice(1) : raw) as { name?: unknown }
+    const parsed = JSON.parse(stripBom(raw)) as { name?: unknown }
     return typeof parsed.name === 'string' && parsed.name !== '' ? parsed.name : null
   } catch {
     return null
@@ -324,7 +322,7 @@ export async function collectLinkCandidates(
     if (typeof dir !== 'string') { scanNotes.push(`跳过无效的扫描目录项（非字符串）：${String(dir)}`); continue }
     let entries: Dirent[]
     try {
-      if (!existsSync(dir) || !statSync(dir).isDirectory()) throw new Error('not-a-directory')
+      if (!isDirectory(dir)) throw new Error('not-a-directory')
       entries = readdirSync(dir, { withFileTypes: true })
     } catch {
       scanNotes.push(`跳过不可读的扫描目录：${dir}`)
@@ -351,11 +349,7 @@ function reportError(err: unknown): number {
     LibCheckError, LinkArgumentError, LinkInteractionError, LinkTargetError,
     ProtocolPathError, InstallError, PresetError,
   ]
-  if (KNOWN.some((k) => err instanceof k)) {
-    process.stderr.write(`${(err as Error).message}\n`)
-    return 1
-  }
-  throw err
+  return reportKnownError(err, KNOWN)
 }
 
 interface LinkPlan {
@@ -459,7 +453,7 @@ async function resolveLinkCollection(
   return { names: names.map((n) => String(n)), source }
 }
 
-/** 计划构建（统一前置判定）：把原 runLink 的 A2–A5 + 计划构建整体搬入。
+/** 计划构建（统一前置判定）：前置校验 + 计划构建整体在这里。
  *  直通与交互入口共用同一份计划——预览与执行因此天然同源（PRD §13 验收 9）。 */
 async function buildLinkPlan(args: {
   targets: readonly string[]
@@ -660,10 +654,10 @@ async function refreshLastQuietly(rootDir: string): Promise<void> {
   }
 }
 
-/** 执行（写序 = S6 裁决：state → package.json → install → last → watch → 提示 → 留痕）——逐字搬运原 438–521 */
+/** 执行（写序 = S6 裁决：state → package.json → install → last → watch → 提示 → 留痕） */
 async function executeLinkPlan(plan: LinkPlan, opts: LinkOptions): Promise<number> {
   const { rootDir, pm, st, targets, aggregated, linkedTargets, pendingLinks, peerWarn, totalChanged, skippedTotal, traceChanges, traceInstalls } = plan
-  // 注册 upsert（仅交互入口延后至此：闸门确认后写一次；直通在计划期已写——deferredRegistration 恒 false）
+  // 注册 upsert（交互入口延后至此：闸门确认后写一次；直通在计划期已写，此处恒 false）
   if (plan.deferredRegistration) {
     const newUpserts = plan.planUpserts.filter((u) => u.isNew)
     if (newUpserts.length > 0) {
@@ -803,7 +797,7 @@ async function addScanDir(): Promise<void> {
   const dir = String(inp).trim()
   let ok = false
   try {
-    ok = isAbsolute(dir) && existsSync(dir) && statSync(dir).isDirectory()
+    ok = isAbsolute(dir) && isDirectory(dir)
   } catch {
     ok = false
   }
@@ -852,7 +846,7 @@ async function pickLinkTargets(
   if (cand.discovered.length > 0) {
     groups[`扫描发现（${cand.discovered.length}）`] = cand.discovered.map((d) => ({
       // ⚠️ value 必须是**路径**（不是包名）：该库尚未注册，`resolveTarget(包名)` 会因「含 / 的裸名被判为类路径」
-      // 而抛 LinkArgumentError（`link.ts:115-121`）——走路径分支才能完成「隐形注册」（T4 评审 Important-1 修正）
+      // 而抛 LinkArgumentError——走路径分支才能完成「隐形注册」（T4 评审 Important-1 修正）
       value: d.dirAbs,
       label: d.hitMembers.length > 0 ? `${d.key}  ★  [未注册]` : `${d.key}  [未注册]`,
       hint: d.hitMembers.length === 0 ? `${d.dirLabel}｜未在依赖中，链接前需先 pnpm add` : d.dirLabel,

@@ -1,5 +1,6 @@
 import { existsSync, readFileSync, statSync } from 'node:fs'
 import { isAbsolute, join, relative, resolve } from 'node:path'
+import { stripBom } from '../util.js'
 import { ManifestParseError } from './workspace.js'
 
 // ── 错误类（spec §5 逐字；统一「描述。\n下一步：」两行模板）──
@@ -66,11 +67,6 @@ export function findHostConfig(cwd: string): string {
     if (existsSync(p) && statSync(p).isFile()) return p
   }
   throw new InitConfigNotFoundError(cwd)
-}
-
-// ── 源码读取：剥 UTF-8 BOM（spec §8 自决 12）──
-export function stripBom(source: string): string {
-  return source.charCodeAt(0) === 0xfeff ? source.slice(1) : source
 }
 
 // ── 对象体定位（spec §4.4 + §8 自决 2）──

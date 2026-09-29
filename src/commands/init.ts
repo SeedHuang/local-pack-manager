@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import * as clack from '@clack/prompts'
+import { stripBom } from '../util.js'
 import { findWorkspaceRoot } from '../core/workspace.js'
 import { readProjectConfig, LpmConfigParseError } from '../state/index.js'
 import { writeTextFileAtomic } from '../state/atomic.js'
@@ -22,8 +23,8 @@ import {
   hasTopLevelKeys,
   injectFragment,
   removeFragment,
-  stripBom,
 } from '../core/utoopack.js'
+import { reportError as reportKnownError } from './errors.js'
 
 export interface InitOptions { dryRun?: boolean }
 
@@ -52,11 +53,7 @@ function reportError(err: unknown): number {
     InitAlreadyInjectedError, InitNotInjectedError, InitIncompleteMarkerError,
     WorkspaceNotFoundError, ManifestParseError, LpmConfigParseError,
   ]
-  if (KNOWN.some((k) => err instanceof k)) {
-    process.stderr.write(`${(err as Error).message}\n`)
-    return 1
-  }
-  throw err
+  return reportKnownError(err, KNOWN)
 }
 
 async function ensureInitPreconditions(cwd: string): Promise<{ hostPath: string; source: string }> {

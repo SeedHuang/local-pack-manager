@@ -20,6 +20,7 @@ import type { LinkState, ProjectLpmConfig } from '../state/types.js'
 import { PresetError, readPresets } from './preset.js'
 import { collectLinkCandidates, parsePathInput, type LinkCandidate } from './link.js'
 import { renderPlan, type PlanView } from './plan-view.js'
+import { reportError as reportKnownError } from './errors.js'
 
 /** forget 相关错误（命令域；沿用「错误类归命令文件」先例） */
 export class ForgetError extends Error {
@@ -32,11 +33,7 @@ export class ForgetError extends Error {
 /** 命令级错误上报（与 link/unlink/preset 同形）：KNOWN 直接打印 + return 1；其余 rethrow */
 function reportError(err: unknown): number {
   const KNOWN = [ForgetError, WorkspaceNotFoundError, ManifestParseError, WorkspacePatternError, LpmConfigParseError, LpmStateParseError, PresetError]
-  if (KNOWN.some((k) => err instanceof k)) {
-    process.stderr.write(`${(err as Error).message}\n`)
-    return 1
-  }
-  throw err
+  return reportKnownError(err, KNOWN)
 }
 
 const FORGET_USAGE = 'lpm forget <名字|路径>'

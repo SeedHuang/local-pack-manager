@@ -3,6 +3,7 @@ import { isAbsolute } from 'node:path'
 import * as clack from '@clack/prompts'
 import { LpmStateParseError, readUserConfig, writeUserConfig } from '../state/index.js'
 import { renderPlan, type PlanView } from './plan-view.js'
+import { reportError as reportKnownError } from './errors.js'
 
 /** dir 相关错误（命令域；沿用「错误类归命令文件」先例） */
 export class DirError extends Error {
@@ -15,11 +16,7 @@ export class DirError extends Error {
 /** 命令级错误上报（与 link/unlink/preset 同形）：KNOWN 直接打印 + return 1；其余 rethrow */
 function reportError(err: unknown): number {
   const KNOWN = [DirError, LpmStateParseError]
-  if (KNOWN.some((k) => err instanceof k)) {
-    process.stderr.write(`${(err as Error).message}\n`)
-    return 1
-  }
-  throw err
+  return reportKnownError(err, KNOWN)
 }
 
 const DIR_USAGE = 'lpm dir add <路径> | rm <路径> | ls'

@@ -36,11 +36,12 @@ import type { LastRunTrace, LinkState, ProjectLpmConfig } from '../state/types.j
 import { LinkArgumentError, LinkCancelledError, LinkInteractionError, parsePathInput, resolveMonorepo, resolveTarget } from './link.js'
 import { renderPlan, type PlanEntry, type PlanView } from './plan-view.js'
 import { traceFailure } from './run-trace.js'
+import { reportError as reportKnownError } from './errors.js'
 
 // unlink 直通版编排（S7 spec §4.4）。行为权威 = spec；崩溃安全顺序（PRD §9 行 306）：
 // 先恢复文件 → install → 复验/--force → 才删 state（last 先写后删——评审 P1-1）。
 
-export interface UnlinkOptions { all?: boolean; dryRun?: boolean }
+interface UnlinkOptions { all?: boolean; dryRun?: boolean }
 
 export class LinkStateCorruptError extends Error {
   constructor(public key: string, message: string) {
@@ -54,6 +55,18 @@ interface FileAgg { content: string; hits: RestoreHit[]; changedCount: number }
 
 function toRel(rootDir: string, abs: string): string {
   return relative(rootDir, abs).replaceAll('\\', '/')
+}
+
+/** raw → key（直通/交互共用；spec §4.4 B1）：注册名 / 非路径语法 / @scope 直接作 key；
+ *  路径才走 resolveTarget → resolveMonorepo → 回退相对路径链。异常原样上抛（调用方决定吞/报） */
+async function resolveUnlinkKey(raw: string, cfg: ProjectLpmConfig | null, rootDir: string, cwd: string): Promise<string> {
+  const registered = cfg?.libs !== undefined && Object.hasOwn(cfg.libs, raw)
+  const looksLikePath = raw.includes('/') || raw.includes('\\') || raw.startsWith('.') || isAbsolute(raw)
+  if (registered || !looksLikePath || raw.startsWith('@')) return raw
+  const rt = await resolveTarget(raw, cfg, rootDir, cwd)
+  if (rt.source === 'name') return rt.key
+  const mr = await resolveMonorepo(rt.libDirAbs)
+  return mr.name !== '' ? mr.name : toRel(rootDir, mr.libDirAbs)
 }
 
 /** 手工逃生三步文案（S8 §4.3：扩为导出供 repair 复用同一份字符串——零文案改动） */
@@ -70,11 +83,7 @@ function reportError(err: unknown): number {
     LibCheckError, LinkArgumentError, LinkInteractionError, LinkStateCorruptError,
     InstallError,
   ]
-  if (KNOWN.some((k) => err instanceof k)) {
-    process.stderr.write(`${(err as Error).message}\n`)
-    return 1
-  }
-  throw err
+  return reportKnownError(err, KNOWN)
 }
 
 /** C 条目校验（裁决 5）：original 为对象、非空、键值全非空 string；损坏 → LinkStateCorruptError
@@ -126,7 +135,7 @@ function verifyResidue(rootDir: string, cfg: ProjectLpmConfig | null, key: strin
       out.push({ rel: toRel(rootDir, mp), nmRel, status: 'missing' })
       continue
     }
-    // entity / link-elsewhere → ok（无 note）；unknown → ok + 注明
+    // entity / link-elsewhere → ok（note 无值）；unknown → ok + 注明（probe.note 原样透传）
     out.push({ rel: toRel(rootDir, mp), nmRel, status: 'ok', note: probe.note })
   }
   return out
@@ -200,20 +209,7 @@ async function buildUnlinkPlan(args: {
       seenRaw.add(raw)
       // 名字分支（spec §4.4 B1）：非路径语法的 target 直接作 key——不读 lib 目录、不要求注册
       // （unlink 用途含 lib 已删/未注册残留条目）；路径分支才走 resolveTarget/resolveMonorepo
-      const registered = cfg?.libs !== undefined && Object.hasOwn(cfg.libs, raw)
-      const looksLikePath = raw.includes('/') || raw.includes('\\') || raw.startsWith('.') || isAbsolute(raw)
-      let key: string
-      if (registered || !looksLikePath || raw.startsWith('@')) {
-        key = raw
-      } else {
-        const rt = await resolveTarget(raw, cfg, rootDir, cwd)
-        if (rt.source === 'name') {
-          key = rt.key
-        } else {
-          const mr = await resolveMonorepo(rt.libDirAbs)
-          key = mr.name !== '' ? mr.name : toRel(rootDir, mr.libDirAbs)
-        }
-      }
+      const key = await resolveUnlinkKey(raw, cfg, rootDir, cwd)
       if (seenKey.has(key)) { dedupSkipped++; continue }
       seenKey.add(key)
       requested.push(key)
@@ -388,7 +384,7 @@ function unlinkPlanView(plan: UnlinkPlan): PlanView {
   return { entries, install, watch: [] }
 }
 
-/** 执行（写序 = S7 裁决：恢复文件 → install 成功 → 才删 state）——逐字搬运原 runUnlink E1–J */
+/** 执行（写序 = S7 裁决：恢复文件 → install 成功 → 才删 state） */
 async function executeUnlinkPlan(plan: UnlinkPlan): Promise<number> {
   const {
     rootDir, pm, cfg, st, aggregated, pendingDelete, verifyManifests, planIdempotent,
@@ -493,7 +489,7 @@ async function executeUnlinkPlan(plan: UnlinkPlan): Promise<number> {
 }
 
 /** 已链接列表数据源（spec §4.6）：state.links 键 × status 判定面（动态 import 规避 status ⇄ unlink 静态循环） */
-export interface LinkedItem {
+interface LinkedItem {
   key: string; rel: string; restoreTo: string[]; linkedMembers: string[]
   drifted: boolean; corrupt: boolean
 }
@@ -574,17 +570,12 @@ async function pickLinkedKeys(
   for (const raw of raws) {
     // 路径 → key（复用直通解析链；解析失败/不在注册表 → 一律按「未处于链接状态」处理，不中断）
     let key = raw
-    const looksLikePath = raw.includes('/') || raw.includes('\\') || raw.startsWith('.') || isAbsolute(raw)
-    const registered = Object.hasOwn(ctx.cfg?.libs ?? {}, raw)
-    if (!registered && looksLikePath && !raw.startsWith('@')) {
-      try {
-        const rt = await resolveTarget(raw, ctx.cfg, ctx.rootDir, ctx.cwd)
-        key = rt.source === 'name' ? rt.key : ((await resolveMonorepo(rt.libDirAbs)).name || toRel(ctx.rootDir, rt.libDirAbs))
-      } catch (err) {
-        if (err instanceof LinkCancelledError) throw err   // 用户在 B4 让选里主动取消 → 必须中止（spec §4.10 / §8 裁定 2）
-        process.stdout.write(`当前未处于链接状态：${raw}。可用 lpm status 核对三方状态\n`)
-        continue
-      }
+    try {
+      key = await resolveUnlinkKey(raw, ctx.cfg, ctx.rootDir, ctx.cwd)
+    } catch (err) {
+      if (err instanceof LinkCancelledError) throw err   // 用户在 B4 让选里主动取消 → 必须中止（spec §4.10 / §8 裁定 2）
+      process.stdout.write(`当前未处于链接状态：${raw}。可用 lpm status 核对三方状态\n`)
+      continue
     }
     if (items.some((i) => i.key === key)) values.push(key)
     else process.stdout.write(`当前未处于链接状态：${raw}。可用 lpm status 核对三方状态\n`)

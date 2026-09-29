@@ -9,6 +9,7 @@ import {
 import * as clack from '@clack/prompts'
 import type { ProjectLpmConfig } from '../state/types.js'
 import { renderPlan, type PlanView } from './plan-view.js'
+import { reportError as reportKnownError } from './errors.js'
 
 /** 预设相关错误（命令域；沿用 S6/S7「错误类归命令文件」先例） */
 export class PresetError extends Error {
@@ -59,11 +60,7 @@ function validatePresetName(name: string): void {
 /** 命令级错误上报（与 link/unlink 同形）：KNOWN 直接打印 + return 1；其余 rethrow */
 function reportError(err: unknown): number {
   const KNOWN = [PresetError, WorkspaceNotFoundError, LpmConfigParseError, LpmStateParseError]
-  if (KNOWN.some((k) => err instanceof k)) {
-    process.stderr.write(`${(err as Error).message}\n`)
-    return 1
-  }
-  throw err
+  return reportKnownError(err, KNOWN)
 }
 
 /** `lpm save <预设名>`：把当前链接集存为预设（spec §4.8）——纯直通，不弹菜单 */

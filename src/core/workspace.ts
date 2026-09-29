@@ -1,5 +1,6 @@
-import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import path from 'node:path'
+import { isDirectory, stripBom } from '../util.js'
 import { matchWorkspacePattern } from './globmatch.js'
 
 // —— 数据契约（S1 spec §4.2 冻结，不得改动）——
@@ -51,10 +52,6 @@ export class WorkspacePatternError extends Error {
 
 // —— 内部：manifest 读取（spec §4.2 读取规约：剥 UTF-8 BOM）——
 
-function stripBom(source: string): string {
-  return source.charCodeAt(0) === 0xfeff ? source.slice(1) : source
-}
-
 /** 严格读取：不可读 / JSON 坏 → ManifestParseError（§6.4） */
 function readManifest(manifestPath: string): Record<string, unknown> {
   let source: string
@@ -102,10 +99,6 @@ function extractWorkspacesPatterns(manifest: Record<string, unknown>): string[] 
     if (Array.isArray(pkgs) && pkgs.every((x) => typeof x === 'string')) return pkgs as string[]
   }
   return null
-}
-
-function isDir(p: string): boolean {
-  return existsSync(p) && statSync(p).isDirectory()
 }
 
 // —— 内部：pnpm-workspace.yaml 极简 YAML 子集（spec §5 YAML 规则 1-6）——
@@ -194,7 +187,7 @@ function parsePackagesYaml(source: string, yamlPath: string): string[] {
 // —— 公开 API（S1 冻结签名；§4.4 行为契约）——
 
 export async function findWorkspaceRoot(startDir: string): Promise<string> {
-  if (!isDir(startDir)) {
+  if (!isDirectory(startDir)) {
     throw new WorkspaceNotFoundError(
       'start-dir-missing',
       `路径不存在：${startDir}。\n下一步：请检查路径后重试`,
