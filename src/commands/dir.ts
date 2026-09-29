@@ -1,6 +1,6 @@
-import { existsSync, statSync } from 'node:fs'
 import { isAbsolute } from 'node:path'
 import * as clack from '@clack/prompts'
+import { isDirectory } from '../util.js'
 import { LpmStateParseError, readUserConfig, writeUserConfig } from '../state/index.js'
 import { renderPlan, type PlanView } from './plan-view.js'
 import { reportError as reportKnownError } from './errors.js'
@@ -26,7 +26,7 @@ async function runDirAdd(dir: string, opts: { dryRun?: boolean }): Promise<numbe
   const trimmed = dir.trim()
   let ok = false
   try {
-    ok = isAbsolute(trimmed) && existsSync(trimmed) && statSync(trimmed).isDirectory()
+    ok = isAbsolute(trimmed) && isDirectory(trimmed)
   } catch {
     ok = false
   }

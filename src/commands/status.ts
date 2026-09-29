@@ -1,6 +1,7 @@
 import { readFileSync, realpathSync, statSync } from 'node:fs'
 import { dirname, join, relative } from 'node:path'
 import { stripBom } from '../util.js'
+import { reportError as reportKnownError } from './errors.js'
 import { PMAmbiguousError, PMUnresolvedError, resolvePackageManager, type PackageManagerId } from '../core/pm.js'
 import { probeNodeModules, type NmProbe } from '../core/nmcheck.js'
 import { LOCAL_PROTOCOL_RE, mapProtocol, readDepValues } from '../core/rewriter.js'
@@ -296,10 +297,6 @@ export async function runStatus(opts: StatusOptions, cwd: string = process.cwd()
     }
     return 0
   } catch (err) {
-    if (KNOWN.some((k) => err instanceof k)) {
-      process.stderr.write(`${(err as Error).message}\n`)
-      return 1
-    }
-    throw err
+    return reportKnownError(err, KNOWN)
   }
 }
