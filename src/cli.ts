@@ -10,6 +10,7 @@ import { runRepair } from './commands/repair.js'
 import { runPreset, runSave } from './commands/preset.js'
 import { runDir } from './commands/dir.js'
 import { runForget } from './commands/forget.js'
+import { runInit, runUninit } from './commands/init.js'
 import { runUse } from './commands/use.js'
 import { LPM_VERSION } from './version.js'
 
@@ -161,6 +162,30 @@ export function buildProgram(): Command {
         .option('--dry-run', '仅打印执行计划，不落盘不执行')
         .action(async (targets: string[], options: { dryRun?: boolean }) => {
           process.exitCode = await runForget(targets, undefined, { dryRun: options.dryRun })
+        })
+      continue
+    }
+    // S13：init 注入接线（无位置参数；diff 预览确认型，仿 repair）
+    if (meta.name === 'init') {
+      program
+        .command(meta.name)
+        .description(meta.summary)
+        .option('--dry-run', '仅打印注入 diff 预览，不落盘')
+        .allowExcessArguments(false)
+        .action(async (options: { dryRun?: boolean }) => {
+          process.exitCode = await runInit(undefined, { dryRun: options.dryRun })
+        })
+      continue
+    }
+    // S13：uninit 摘除接线（对称）
+    if (meta.name === 'uninit') {
+      program
+        .command(meta.name)
+        .description(meta.summary)
+        .option('--dry-run', '仅打印摘除 diff 预览，不落盘')
+        .allowExcessArguments(false)
+        .action(async (options: { dryRun?: boolean }) => {
+          process.exitCode = await runUninit(undefined, { dryRun: options.dryRun })
         })
       continue
     }

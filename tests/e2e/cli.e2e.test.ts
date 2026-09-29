@@ -592,3 +592,42 @@ describe('lpm dir e2e（S11）', () => {
     expect(r.stderr).toContain('下一步：lpm dir add')  // S12 D4 统一模板：描述行「用法错误。」+ 下一步行含用法串
   })
 })
+
+// S13 e2e（spec §6）：init --dry-run 冒烟 + uninit 未注入报错（spawn 即非 TTY，确认路径不进 e2e）
+describe('lpm init/uninit e2e（S13）', () => {
+  const made: string[] = []
+  function makeHost(): string {
+    const dir = mkdtempSync(join(tmpdir(), 'lpm-e2e-s13-'))
+    made.push(dir)
+    writeFileSync(join(dir, 'package.json'), JSON.stringify({ name: 'root', workspaces: ['apps/*', 'libs/*'] }), 'utf8')
+    const web = join(dir, 'apps', 'web')
+    mkdirSync(join(web, 'config'), { recursive: true })
+    writeFileSync(join(web, 'package.json'), JSON.stringify({ name: 'web', dependencies: { antd: '^5.0.0' } }), 'utf8')
+    writeFileSync(join(web, 'config', 'config.ts'), 'export default defineConfig({\n  antd: {},\n})\n', 'utf8')
+    const libDir = join(dir, 'libs', 'mylib')
+    mkdirSync(libDir, { recursive: true })
+    writeFileSync(join(libDir, 'package.json'), JSON.stringify({ name: '@t/mylib', peerDependencies: { antd: '*' } }), 'utf8')
+    writeFileSync(join(dir, 'lpm.config.json'), JSON.stringify({ version: 1, libs: { '@t/mylib': 'libs/mylib' } }), 'utf8')
+    return web
+  }
+  afterEach(() => {
+    while (made.length > 0) rmSync(made.pop() as string, { recursive: true, force: true })
+  })
+
+  it('init --dry-run：exit 0 + stdout 含 init dry-run + 宿主配置零写盘', async () => {
+    const web = makeHost()
+    const cfg = join(web, 'config', 'config.ts')
+    const before = readFileSync(cfg, 'utf8')
+    const r = await runCli(['init', '--dry-run'], web)
+    expect(r.exitCode).toBe(0)
+    expect(r.stdout).toContain('init dry-run')
+    expect(readFileSync(cfg, 'utf8')).toBe(before)
+  })
+
+  it('uninit --dry-run（未注入）：exit 1 + stderr 含 未检测到 lpm 注入片段', async () => {
+    const web = makeHost()
+    const r = await runCli(['uninit', '--dry-run'], web)
+    expect(r.exitCode).toBe(1)
+    expect(r.stderr).toContain('未检测到 lpm 注入片段')
+  })
+})
