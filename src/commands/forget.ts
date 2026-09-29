@@ -1,6 +1,13 @@
 import { isAbsolute, join, resolve } from 'node:path'
 import * as clack from '@clack/prompts'
-import { findWorkspaceRoot, loadWorkspace, WorkspaceNotFoundError, type Workspace } from '../core/workspace.js'
+import {
+  findWorkspaceRoot,
+  loadWorkspace,
+  ManifestParseError,
+  WorkspaceNotFoundError,
+  WorkspacePatternError,
+  type Workspace,
+} from '../core/workspace.js'
 import {
   LpmConfigParseError,
   LpmStateParseError,
@@ -10,8 +17,8 @@ import {
   writeProjectConfig,
 } from '../state/index.js'
 import type { LinkState, ProjectLpmConfig } from '../state/types.js'
-import { readPresets } from './preset.js'
-import { collectLinkCandidates, parsePathInput } from './link.js'
+import { PresetError, readPresets } from './preset.js'
+import { collectLinkCandidates, parsePathInput, type LinkCandidate } from './link.js'
 
 /** forget 相关错误（命令域；沿用「错误类归命令文件」先例） */
 export class ForgetError extends Error {
@@ -23,7 +30,7 @@ export class ForgetError extends Error {
 
 /** 命令级错误上报（与 link/unlink/preset 同形）：KNOWN 直接打印 + return 1；其余 rethrow */
 function reportError(err: unknown): number {
-  const KNOWN = [ForgetError, WorkspaceNotFoundError, LpmConfigParseError, LpmStateParseError]
+  const KNOWN = [ForgetError, WorkspaceNotFoundError, ManifestParseError, WorkspacePatternError, LpmConfigParseError, LpmStateParseError, PresetError]
   if (KNOWN.some((k) => err instanceof k)) {
     process.stderr.write(`${(err as Error).message}\n`)
     return 1
@@ -55,29 +62,37 @@ function resolveRegisteredNameByPath(raw: string, cfg: ProjectLpmConfig | null, 
 
 /** 单个 target 解析（名字分支查表 / 路径分支反查；spec §4.4）：返回命中的 key 数组 */
 function resolveForgetKey(raw: string, cfg: ProjectLpmConfig | null, rootDir: string, cwd: string): string[] {
-  if (cfg !== null && Object.hasOwn(cfg.libs, raw)) return [raw]
-  const looksLikePath = raw.includes('/') || raw.includes('\\') || raw.startsWith('.') || isAbsolute(raw)
-  if (!looksLikePath) {
+  /** 未命中统一报错（名字分支与路径分支共用构造，行为逐字一致） */
+  const notFound = (): never => {
     throw new ForgetError(
       Object.keys(cfg?.libs ?? {}).length === 0
         ? '当前没有任何已注册的 lib。用 lpm link <路径> 注册'
         : `注册不存在：${raw}。已注册：${registeredList(cfg)}`,
     )
   }
+  if (cfg !== null && Object.hasOwn(cfg.libs, raw)) return [raw]
+  const looksLikePath = raw.includes('/') || raw.includes('\\') || raw.startsWith('.') || isAbsolute(raw)
+  if (!looksLikePath) {
+    notFound()
+  }
   const hits = resolveRegisteredNameByPath(raw, cfg, rootDir, cwd)
   if (hits.length === 0) {
-    throw new ForgetError(
-      Object.keys(cfg?.libs ?? {}).length === 0
-        ? '当前没有任何已注册的 lib。用 lpm link <路径> 注册'
-        : `注册不存在：${raw}。已注册：${registeredList(cfg)}`,
-    )
+    notFound()
   }
   return hits
 }
 
-/** 预设提示（spec §4.4 要点 4，按预设聚合、不洗）——直通与子界面共用 */
+/** 预设提示（spec §4.4 要点 4，按预设聚合、不洗）——直通与子界面共用。
+ *  Ruling OCR-1：presets 内容损坏（顶层非对象）时 PresetError 已属 KNOWN——但删除在此**前**已落盘，
+ *  让错误冒到 reportError 会「删除成功却 exit 1」误导用户；故此处容忍：警告一行并跳过提示（不 rethrow、不中断）。 */
 function printPresetHints(cfg: ProjectLpmConfig | null, deleted: ReadonlySet<string>): void {
-  const view = readPresets(cfg)
+  let view
+  try {
+    view = readPresets(cfg)
+  } catch {
+    process.stdout.write('警告：lpm.config.json 的 presets 内容损坏，跳过预设提示（不影响本次删除）\n')
+    return
+  }
   for (const [presetName, members] of Object.entries(view.entries)) {
     const hit = members.filter((m) => deleted.has(m))
     if (hit.length > 0) {
@@ -127,6 +142,17 @@ export interface ManageRegistryCtx {
 /** 「按路径删除…」虚拟项哨兵（NUL 前缀，沿用 OTHER_OPTION / S10 哨兵惯例；包名不可能含 NUL） */
 const FORGET_PATH_OPTION = '\u0000__forget_path__'
 
+/** 子界面选项元数据（label/hint，行为与 spec §4.5 逐字一致；用 if/else 取代嵌套三元） */
+function optionMeta(c: LinkCandidate): { label: string; hint: string } {
+  if (c.linked) {
+    return { label: `${c.key}  [已链接]`, hint: '先 lpm unlink，或改用 lpm unlink' }
+  }
+  if (!c.cfgIntact) {
+    return { label: `${c.key}  [注册值损坏]`, hint: '修正 lpm.config.json 或删除（修脏路径）' }
+  }
+  return { label: c.key, hint: c.rel }
+}
+
 /** 「管理注册…」子界面（forget 的交互化；spec §4.5）。正常流程一律返回 'back'。
  *  注：ctx 不含 scanDirs——内部 readUserConfig() 现读（P1-7）；子界面只用 registered 部分。 */
 export async function runManageRegistry(ctx: ManageRegistryCtx): Promise<'back'> {
@@ -138,11 +164,7 @@ export async function runManageRegistry(ctx: ManageRegistryCtx): Promise<'back'>
   }
   // 减法心智隔离（spec §4.5）：标题与视觉与主列表明显区分
   clack.note('⚠️ 注册管理（减法操作）：删除注册不会取消任何链接；已链接的库请先 lpm unlink', '注册管理')
-  const options = cand.registered.map((c) => ({
-    value: c.key,
-    label: c.linked ? `${c.key}  [已链接]` : c.cfgIntact ? c.key : `${c.key}  [注册值损坏]`,
-    hint: c.linked ? '先 lpm unlink，或改用 lpm unlink' : c.cfgIntact ? c.rel : '修正 lpm.config.json 或删除（修脏路径）',
-  }))
+  const options = cand.registered.map((c) => ({ value: c.key, ...optionMeta(c) }))
   options.push({ value: FORGET_PATH_OPTION, label: '按路径删除…（手输路径）', hint: '绝对 / 相对 / 多个用空格分隔 / 含空格加引号' })
   const picked = await clack.multiselect({ message: '选择要删除的注册（空格勾选，回车确认）', options, required: false })
   if (clack.isCancel(picked)) { process.stdout.write('已取消\n'); return 'back' }

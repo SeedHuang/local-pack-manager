@@ -8,8 +8,8 @@
 |---|---|
 | 交接时间 | 2026-09-29（Asia/Shanghai；验证基线同一时段实跑） |
 | 项目根 | d:\Seed\local-pack-manager |
-| HEAD | `82e29ef`（`git log --oneline -3` 直读 = `82e29ef fix: 修复预设名带空格无法命中及last.json刷新逻辑` / `5dabd05 feat: 完成 S10 集合与预设功能实现` / `0f9407d docs: 添加 S10 集合与预设的交接文档`）；**S11 全程零 commit**（工作树含 S11 全部未提交改动，见「未提交面」） |
-| 验证基线 | typecheck **0 错误** + build **成功** + unit **28 文件 / 498 例** + e2e **1 文件 / 38 例**（`pnpm verify` exit 0，2026-09-29 实跑；498 = 450 基线 + dir 18 + forget 24 + link-interactive 主列表「管理注册…」+6） |
+| HEAD | `27c4d08`（`git log --oneline -3` 直读 = `27c4d08 feat: 完成 S11 注册管理功能实现` / `82e29ef fix: 修复预设名带空格无法命中及last.json刷新逻辑` / `5dabd05 feat: 完成 S10 集合与预设功能实现`）；**S11 主体已提交 `27c4d08`，OCR 修复波（forget.ts / dir.ts / forget-command.test.ts）+ 文档计数修正未提交**（见「未提交面」） |
+| 验证基线 | typecheck **0 错误** + build **成功** + unit **28 文件 / 499 例** + e2e **1 文件 / 38 例**（`pnpm verify` exit 0，2026-09-29 实跑；499 = 450 基线 + dir 18 + forget 25（含 OCR 修复波回归钉 FG-25）+ link-interactive 主列表「管理注册…」+6） |
 | 继任自 | docs/handoffs/2026-09-28-s11-registry-management.md（S11 交接词）；本文件为其后继 S12 交接词草稿 |
 | 状态 | **待 S12 开工前修订定版**（S12 范围以 brainstorming 一次一问澄清；开工第一问见「开放问题」1） |
 
@@ -19,8 +19,8 @@ d:\Seed\local-pack-manager —— lpm（Local Pack Manager）：本地 lib link/
 
 ## 现状
 
-- 已交付并提交（master，`git log --oneline` 直读自证）：S1+S2 `1b46580`、S3 `3adad48`、S4 `96784dd`、S5 `2e46fa0`、S6 `7d38504`、S7 `cb1e0e0`、S8 `0b78b49`、S9 `4abf950`+`df908c5`、S10 `5dabd05`+`82e29ef`。**S11 已实现但未提交**（HEAD 仍为 `82e29ef`，改动待用户 commit）
-- **S11「登记管理」已全部实现（未提交）**，交付物：
+- 已交付并提交（master，`git log --oneline` 直读自证）：S1+S2 `1b46580`、S3 `3adad48`、S4 `96784dd`、S5 `2e46fa0`、S6 `7d38504`、S7 `cb1e0e0`、S8 `0b78b49`、S9 `4abf950`+`df908c5`、S10 `5dabd05`+`82e29ef`、**S11 `27c4d08`**（S11 OCR 修复波 + 文档计数修正未提交）
+- **S11「登记管理」已全部实现并提交（`27c4d08`）**，交付物：
   - `lpm forget <名字|路径>...` 直通（名字/路径两路解析；须先 unlink 的已链接拦截整批停零写盘；删空保留 `libs: {}`；预设影响「提示但不洗」`printPresetHints`；多 target 去重 Set 化）
   - `lpm forget` 无参数 TTY → 「管理注册…」子界面（`runManageRegistry`：`clack.note` 减法心智隔离标题 + 多选删除 +「按路径删除…」（`parsePathInput` 复用 + 注册表视角路径反查，不 stat）+ `[已链接]` 剔除提示 + `[注册值损坏]` 可删 + 二次确认 + 空删除集合不弹确认 + 删空保留 `libs: {}`）
   - link 主列表「管理注册…」入口（在「其他…」之后；`registered > 0` 才出现；勾选含它 → 返回 `{ kind: 'manage' }` 忽略其它勾选项；`pickLinkTargets` 返回形态升级为联合类型 `{ kind: 'link'; targets; collectionLevel } | { kind: 'manage' } | CANCELLED`，未退回 string[]；`runLinkInteractive` 的 `cfg` 改 `let`，manage 分支返回后重读 cfg 再 continue 重扫）
@@ -28,7 +28,7 @@ d:\Seed\local-pack-manager —— lpm（Local Pack Manager）：本地 lib link/
   - cli 接线：`forget` / `dir` 从 stub 循环提出来（description 不带「（计划 S11）」后缀）；unlink 空态三去向的 forget 行去注「（待 S11 上线）」
   - 结构：`src/commands/forget.ts`（新）、`src/commands/dir.ts`（新）、`src/commands/link.ts`（管理分支 + 返回升级）、`src/commands/unlink.ts`（去注）、`src/cli.ts`（接线）、`src/commands/registry.ts`（核对无改动）
 - 验证证据：见元信息表『验证基线』（单源，勿在此重复填写）
-- 提交状态：**未 commit**（S11 改动全部在工作树，HEAD 停在 `82e29ef`；按全局 Git 写操作禁令由用户自行 commit）
+- 提交状态：**S11 主体已 commit（`27c4d08`）**；OCR 修复波 3 文件（forget.ts / dir.ts / forget-command.test.ts）+ 文档计数修正 2 文件（S11 spec §10、本交接词）未提交——按全局 Git 写操作禁令由用户自行 commit
 - 工作树异常：无。注意：① `.superpowers/` 被 `.gitignore` 忽略 —— SDD 账本不在 git 历史中，只存在于磁盘；② 本交接词草稿与 `.superpowers/sdd/2026-09-28-s11-registry-management.md/task-5-report.md` 是 S11 收尾新增面
 
 ## 过程记录
@@ -100,30 +100,21 @@ S12「引导性打磨」（PRD §14 行 411：**--dry-run 全面化 / 未知命�
 
 ## 未提交面
 
-（S11 全程零 commit，改动由用户 commit。S12 开工前请先让用户提交或核对以下工作树面——来自 `git status --porcelain -uall`，2026-09-29 实跑）
+（S11 主体已 commit `27c4d08`；剩余 = OCR 修复波 3 文件 + 文档计数修正 2 文件，由用户 commit。S12 开工前请先让用户提交或核对以下工作树面——来自 `git status --porcelain -uall`，2026-09-29 实跑）
 
 ```
- M docs/handoffs/2026-09-28-s11-registry-management.md
- M docs/superpowers/specs/2026-09-28-s10-collections-presets-design.md
- M docs/superpowers/specs/2026-09-28-s9-interactive-design.md
- M src/cli.ts
- M src/commands/link.ts
- M src/commands/unlink.ts
- M tests/e2e/cli.e2e.test.ts
- M tests/unit/link-interactive.test.ts
- M tests/unit/unlink-interactive.test.ts
-?? docs/handoffs/2026-09-28-s12-guiding-polish.md
-?? docs/superpowers/plans/2026-09-28-s11-registry-management.md
-?? docs/superpowers/specs/2026-09-28-s11-registry-management-design.md
-?? src/commands/dir.ts
-?? src/commands/forget.ts
-?? tests/unit/dir-command.test.ts
-?? tests/unit/forget-command.test.ts
+ M docs/handoffs/2026-09-28-s12-guiding-polish.md
+ M docs/superpowers/specs/2026-09-28-s11-registry-management-design.md
+ M src/commands/dir.ts
+ M src/commands/forget.ts
+ M tests/unit/forget-command.test.ts
 ```
+
+> 说明：`src/commands/dir.ts` / `forget.ts` / `forget-command.test.ts` 是 OCR 修复波的 3 个文件（KNOWN 补齐 + printPresetHints 容忍 + optionMeta/notFound helper + dir rm trim + validScanDirs + FG-25 回归钉）；两份文档是终态计数修正（499 例）。其余 S11 文件已在 `27c4d08` 内提交。
 
 ## 开工前先做
 
-1. `git status --porcelain -uall` + `git log --oneline -3` 确认 S11 改动是否已由用户 commit（预期：HEAD 前进到 S11 提交、工作树 clean 或仅剩本交接词）
+1. `git status --porcelain -uall` + `git log --oneline -3` 确认 S11 提交状态（预期：HEAD = `27c4d08`；工作树仅剩 OCR 修复波 3 文件 + 文档计数修正 2 文件，未提交面见上）
 2. 读 `.superpowers/sdd/2026-09-28-s11-registry-management.md/progress.md` **尾部**（Setup 裁定、T1–T5 记录与实施期裁定 R1-1…R1-3、终态计数）
 3. 读 PRD §7 行 270、§11 行 346–364、§13 行 377–387、§14 行 411、附录 A 行 477–478
 4. 读 S9 spec §7 行 462、S10 spec §7、S11 spec §7（三份 spec 的 S12 依赖面）
@@ -132,4 +123,4 @@ S12「引导性打磨」（PRD §14 行 411：**--dry-run 全面化 / 未知命�
 
 ## 开场话术
 
-读 docs/handoffs/2026-09-28-s12-guiding-polish.md，按交接词继续：S12「引导性打磨」spec 期开工。注意：S11「登记管理」已全部实现（forget 直通 +「管理注册…」子界面 + dir + cli 接线），终态 `pnpm verify` exit 0 = unit 28 文件 / 498 例 + e2e 38 例，但 **S11 改动尚未 commit**（HEAD 仍 `82e29ef`）——开工第一问先确认 S11 提交状态，再进 S12 范围澄清。
+读 docs/handoffs/2026-09-28-s12-guiding-polish.md，按交接词继续：S12「引导性打磨」spec 期开工。注意：S11「登记管理」已全部实现并提交（`27c4d08`），终态 `pnpm verify` exit 0 = unit 28 文件 / 499 例 + e2e 38 例；**仅 OCR 修复波 3 文件 + 文档计数修正 2 文件待 commit**——开工第一问先确认 S11 提交状态，再进 S12 范围澄清。

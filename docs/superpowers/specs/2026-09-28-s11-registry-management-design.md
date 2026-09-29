@@ -519,7 +519,7 @@ runForget(targets, cwd)
 
 ## 10. 实现期实测与裁定
 
-**终态计数**（`pnpm verify` 实跑，2026-09-29；最终全量评审修复波后）：exit 0 = typecheck **0 错误** + build **成功** + unit **28 文件 / 498 例** + e2e **1 文件 / 38 例**。开工前基线（S11 交接词，2026-09-28 22:06 实跑）为 unit 26 文件 / 450 例 + e2e 1 文件 / 33 例 → 终态 +2 文件（`dir-command.test.ts` / `forget-command.test.ts`）、unit +48 例（dir 18 + forget 24 + link-interactive 主列表「管理注册…」+6：LI-S11-1…5 + 最终评审修复波新增 LI-S11-5b）、e2e +5 例（E2E-S11-1…5）。取数命令 = `pnpm verify`。
+**终态计数**（`pnpm verify` 实跑，2026-09-29；最终全量评审修复波 + OCR 修复波后）：exit 0 = typecheck **0 错误** + build **成功** + unit **28 文件 / 499 例** + e2e **1 文件 / 38 例**。开工前基线（S11 交接词，2026-09-28 22:06 实跑）为 unit 26 文件 / 450 例 + e2e 1 文件 / 33 例 → 终态 +2 文件（`dir-command.test.ts` / `forget-command.test.ts`）、unit +49 例（dir 18 + forget 25：FG-1…24 + OCR 修复波回归钉 FG-25 + link-interactive 主列表「管理注册…」+6：LI-S11-1…5 + 最终评审修复波新增 LI-S11-5b）、e2e +5 例（E2E-S11-1…5）。取数命令 = `pnpm verify`。
 
 **实施期细则裁定**：
 

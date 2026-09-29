@@ -208,6 +208,14 @@ describe('lpm forget 直通（S11）', () => {
     expect(cap.out.join('')).toContain('当前不是交互终端；直通用法：lpm forget <名字|路径>')
     expect(multiselect).not.toHaveBeenCalled()   // 零 clack 调用（S8 exit-13 事故同族回归钉）
   })
+
+  it('FG-25 presets 顶层非对象（脏配置）→ 删除成功 + 警告一行 + exit 0 不抛（OCR-1 回归钉）', async () => {
+    const ws = makeWs({ 'lpm.config.json': JSON.stringify({ version: 1, packageManager: 'pnpm', libs: { '@t/a': 'libs/a' }, presets: 'oops' }) })
+    const cap = captureOut()
+    await expect(runForget(['@t/a'], ws)).resolves.toBe(0)   // resolves 断言隐含「不抛未处理异常」
+    expect(readLibs(ws)).toEqual({})                         // 删除已落盘（在预设提示之前）
+    expect(cap.out.join('')).toContain('presets 内容损坏')
+  })
 })
 
 describe('lpm forget 交互（S11）', () => {

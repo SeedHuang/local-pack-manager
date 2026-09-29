@@ -43,8 +43,9 @@ async function runDirAdd(dir: string): Promise<number> {
   return 0
 }
 
-/** `lpm dir rm <路径>`：按值移除（空态与不在列表分别报错） */
-async function runDirRm(dir: string): Promise<number> {
+/** `lpm dir rm <路径>`：按值移除（空态与不在列表分别报错）；先 trim（与 runDirAdd 对称：add 存的都是 trim 后值） */
+async function runDirRm(raw: string): Promise<number> {
+  const dir = raw.trim()
   const cur = await readUserConfig()
   if (cur.scanDirs.length === 0) {
     throw new DirError('当前没有任何扫描目录。可用 lpm dir add <路径> 添加')
@@ -57,13 +58,18 @@ async function runDirRm(dir: string): Promise<number> {
   return 0
 }
 
+/** 过滤出合法（字符串）扫描目录项；非字符串项打印一行跳过提示（脏配置降级，runDirLs / runDirInteractive 共用） */
+function validScanDirs(scanDirs: readonly string[]): string[] {
+  for (const d of scanDirs) {
+    if (typeof d !== 'string') process.stdout.write(`跳过无效的扫描目录项（非字符串）：${String(d)}\n`)
+  }
+  return scanDirs.filter((d) => typeof d === 'string')
+}
+
 /** `lpm dir ls`：逐行列出（非字符串元素跳过 + 一行提示） */
 async function runDirLs(): Promise<number> {
   const cur = await readUserConfig()
-  for (const d of cur.scanDirs) {
-    if (typeof d !== 'string') process.stdout.write(`跳过无效的扫描目录项（非字符串）：${String(d)}\n`)
-  }
-  const valid = cur.scanDirs.filter((d) => typeof d === 'string')
+  const valid = validScanDirs(cur.scanDirs)
   if (valid.length === 0) {
     process.stdout.write('当前没有任何扫描目录。用 lpm dir add <路径> 添加\n')
     return 0
@@ -79,10 +85,7 @@ async function runDirInteractive(): Promise<number> {
     return 1
   }
   const cur = await readUserConfig()
-  for (const d of cur.scanDirs) {
-    if (typeof d !== 'string') process.stdout.write(`跳过无效的扫描目录项（非字符串）：${String(d)}\n`)
-  }
-  const valid = cur.scanDirs.filter((d) => typeof d === 'string')
+  const valid = validScanDirs(cur.scanDirs)
   if (valid.length === 0) {
     process.stdout.write('当前没有任何扫描目录。用 lpm dir add <路径> 添加\n')
     return 0
