@@ -8,6 +8,8 @@ import { runUnlink } from './commands/unlink.js'
 import { runStatus } from './commands/status.js'
 import { runRepair } from './commands/repair.js'
 import { runPreset, runSave } from './commands/preset.js'
+import { runDir } from './commands/dir.js'
+import { runForget } from './commands/forget.js'
 import { runUse } from './commands/use.js'
 import { LPM_VERSION } from './version.js'
 
@@ -100,6 +102,28 @@ export function buildProgram(): Command {
         .argument('[args...]', 'rm <名>')
         .action(async (args: string[]) => {
           process.exitCode = await runPreset(args)
+        })
+      continue
+    }
+    // S11：dir 接线（无参数 → 交互；add/rm/ls → 直通；分派在 runDir 内）
+    if (meta.name === 'dir') {
+      program
+        .command(meta.name)
+        .description(meta.summary)
+        .argument('[args...]', 'add <路径> | rm <路径> | ls')
+        .action(async (args: string[]) => {
+          process.exitCode = await runDir(args)
+        })
+      continue
+    }
+    // S11：forget 接线（无参数 → 交互；[targets...] → 直通删除）
+    if (meta.name === 'forget') {
+      program
+        .command(meta.name)
+        .description(meta.summary)
+        .argument('[targets...]', '注册名或路径')
+        .action(async (targets: string[]) => {
+          process.exitCode = await runForget(targets)
         })
       continue
     }

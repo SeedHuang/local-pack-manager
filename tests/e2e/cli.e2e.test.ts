@@ -510,3 +510,61 @@ describe('lpm save e2e（S10）', () => {
     expect(r.stderr).toContain('三者互斥')
   })
 })
+
+// S11 e2e（spec §6）：forget 需真实 workspace fixture（判定位置在 findWorkspaceRoot 之后）；
+// dir 纯用户级但 e2e helper 不隔离 HOME——只测不写盘的面（非 TTY / 用法错误），写路径全归 unit（mock homedir）
+describe('lpm forget e2e（S11）', () => {
+  const made: string[] = []
+  function makeProject(files: Record<string, string> = {}): string {
+    const dir = mkdtempSync(join(tmpdir(), 'lpm-e2e-forget-'))
+    made.push(dir)
+    const full: Record<string, string> = { 'package.json': JSON.stringify({ name: 'proj' }), ...files }
+    for (const [name, content] of Object.entries(full)) {
+      const p = join(dir, name)
+      mkdirSync(join(p, '..'), { recursive: true })
+      writeFileSync(p, content, 'utf8')
+    }
+    return dir
+  }
+  afterEach(() => { while (made.length > 0) rmSync(made.pop() as string, { recursive: true, force: true }) })
+
+  it('E2E-S11-1：forget 非 TTY 无参数 → exit 1 + 提示 + 无菜单残片', async () => {
+    const dir = makeProject({ 'lpm.config.json': JSON.stringify({ version: 1, libs: { '@t/a': 'libs/a' } }) })
+    const r = await runCli(['forget'], dir)
+    expect(r.exitCode).toBe(1)
+    expect(r.stdout).toContain('当前不是交互终端；直通用法：lpm forget <名字|路径>')
+    expect(r.stdout).not.toContain('已移除注册')
+  })
+
+  it('E2E-S11-2：forget 不存在 → exit 1 + 注册不存在', async () => {
+    const dir = makeProject({ 'lpm.config.json': JSON.stringify({ version: 1, libs: { '@t/a': 'libs/a' } }) })
+    const r = await runCli(['forget', 'nope'], dir)
+    expect(r.exitCode).toBe(1)
+    expect(r.stderr).toContain('注册不存在：nope')
+  })
+
+  it('E2E-S11-3：forget 已链接 → exit 1 + 先 unlink 提示', async () => {
+    const dir = makeProject({
+      'lpm.config.json': JSON.stringify({ version: 1, libs: { '@t/a': 'libs/a' } }),
+      '.lpm/state.json': JSON.stringify({ version: 1, links: { '@t/a': { original: {}, linkedAt: 'x' } } }),
+    })
+    const r = await runCli(['forget', '@t/a'], dir)
+    expect(r.exitCode).toBe(1)
+    expect(r.stderr).toContain('先 lpm unlink @t/a')
+  })
+})
+
+describe('lpm dir e2e（S11）', () => {
+  it('E2E-S11-4：dir 非 TTY 无参数 → exit 1 + 提示 + 无菜单残片（不写真实 ~/.lpm）', async () => {
+    const r = await runCli(['dir'])
+    expect(r.exitCode).toBe(1)
+    expect(r.stdout).toContain('当前不是交互终端；直通用法：lpm dir add <路径>')
+    expect(r.stdout).not.toContain('已移除扫描目录')
+  })
+
+  it('E2E-S11-5：dir 非法子命令 → exit 1 + 用法串（不写盘）', async () => {
+    const r = await runCli(['dir', 'bogus'])
+    expect(r.exitCode).toBe(1)
+    expect(r.stderr).toContain('用法：lpm dir add')
+  })
+})

@@ -133,7 +133,8 @@ describe('unlink 交互入口', () => {
     expect(await runUnlink([], {}, ws)).toBe(0)
     expect(cap.out.join('')).toContain('当前没有已链接的库')
     expect(cap.out.join('')).toContain('lpm forget')
-    expect(cap.out.join('')).toContain('待 S11 上线')
+    expect(cap.out.join('')).toContain('移除 lib 注册')   // S11：forget 已上线，无「（待 S11 上线）」注
+    expect(cap.out.join('')).not.toContain('待 S11 上线')
   })
 
   it('UI-9：列表多选 → 预览 → 确认「是」→ 执行（恢复 + install + 删 state）', async () => {

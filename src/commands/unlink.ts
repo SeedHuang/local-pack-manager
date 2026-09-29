@@ -610,11 +610,11 @@ async function runUnlinkInteractive(opts: UnlinkOptions, cwd: string): Promise<n
     const ws = await loadWorkspace(rootDir)
     const items = await collectLinkedItems(rootDir, ws, cfg, st)
     if (items.length === 0) {
-      // 空态三去向（spec §4.7）；forget 待 S11 上线故加注
+      // 空态三去向（spec §4.7）
       process.stdout.write('当前没有已链接的库。\n')
       process.stdout.write('  lpm link    把依赖切到本地目录联调\n')
       process.stdout.write('  lpm status  核对三方状态\n')
-      process.stdout.write('  lpm forget  移除 lib 注册（待 S11 上线）\n')
+      process.stdout.write('  lpm forget  移除 lib 注册\n')
       return 0
     }
     const picked = await pickLinkedKeys(items, { rootDir, cwd, cfg })

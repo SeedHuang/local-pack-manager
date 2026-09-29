@@ -328,6 +328,7 @@ lpm preset rm <名>                       lpm preset（无参数）
   **不改 `collectLinkCandidates` 的签名与返回形状**——它是 S9 §4.3 的冻结导出（改动会波及 `link-picker` 既有用例）
 - **`collectionLevel` 的传导链（last 刷新的关键）**：非导出的 `pickLinkTargets` 返回值由 `string[]` 改为 `{ targets: string[]; collectionLevel: boolean } | typeof CANCELLED`（`collectionLevel` = 提交集合里含任一虚拟项；空态向导手输路径走 `false`）；随后 `runPlanAndExecute(picked, ctx, collectionLevel)` → `buildLinkPlan({ …, forceLastWrite: collectionLevel })`。
   **契约**（防将来漏传）：**任何新增的集合级入口（如 S11 的 forget 交互复用本函数）都必须显式传 `forceLastWrite`**——这是「谁是集合级操作」的唯一判定点，不允许在 `executeLinkPlan` 里二次推断（否则就是第二份真相）
+  （**S11 已核对，2026-09-29**：`pickLinkTargets` 返回形态在 S10 的 `{ targets, collectionLevel }` 之上扩展为联合类型 `{ kind: 'link'; targets; collectionLevel } | { kind: 'manage' } | CANCELLED`（**未退回 `string[]`**）；「管理注册…」勾选走 `{ kind: 'manage' }` 转向管理子界面，**不触** `collectionLevel`/last 传导——管理不是集合级链接入口，S11 的 forget 交互复用的是 `collectLinkCandidates` 而非 `pickLinkTargets`。）
 
 ### 4.11 非 TTY 与退出码
 
@@ -435,7 +436,7 @@ runLink(targets, opts, cwd)
 
 | 消费方 | 依赖的 S10 产出 |
 |---|---|
-| S11 登记管理 | ① `lpm forget` 会把名字从注册表移除，**预设里的旧名字随之失效** → S10 的失效策略（直通整批停 + 两条修复出路）是 S11 必须一并复核的面；② link 主列表的「管理注册…」入口加在同一个 `pickLinkTargets` 组装点（S10 新加的「快捷」组也在那里，组的顺序：快捷 → 已注册 → 扫描发现 → 其他 → 管理注册…）；③ `pickLinkTargets` 的返回值已改为 `{ targets, collectionLevel }`，S11 接手时不要退回 `string[]` |
+| S11 登记管理 | ① `lpm forget` 会把名字从注册表移除，**预设里的旧名字随之失效** → S10 的失效策略（直通整批停 + 两条修复出路）是 S11 必须一并复核的面；② link 主列表的「管理注册…」入口加在同一个 `pickLinkTargets` 组装点（S10 新加的「快捷」组也在那里，组的顺序：快捷 → 已注册 → 扫描发现 → 其他 → 管理注册…）；③ `pickLinkTargets` 的返回值已改为 `{ targets, collectionLevel }`，S11 接手时不要退回 `string[]`（**已落地（S11 回写，2026-09-29）**：① forget 删除时对预设旧名字「提示但不洗」（`printPresetHints`，预设内容 byte 级不变）；②「管理注册…」已接入主列表且位于「其他…」之后；③ 返回形态升级为联合类型（见 §4.10 注），未退回 `string[]`） |
 | S12 引导性打磨 | `save` / `preset rm` 的 `--dry-run` 与模糊纠错；错误即建议全局化会复核 S10 新增的 16 条文案；`--last/--all/--preset` 的互斥判定是「模糊纠错」的相邻面 |
 | S13 utoopack 适配 | 不受影响（集合级操作复用 `executeLinkPlan`，注入点不动） |
 | 后续候选 | 预设的「直接执行」入口（Q6 已否；触发信号：实际敲 `lpm link --preset` ≥ 2 次/周）；预设重命名 |

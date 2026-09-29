@@ -764,6 +764,8 @@ const OTHER_OPTION = '\u0000__other__'
 /** S10 虚拟项哨兵（NUL 前缀，包名不可能含 NUL——沿用 OTHER_OPTION 惯例） */
 const ALL_REGISTERED = '\u0000__all_registered__'
 const LAST_LINKED = '\u0000__last__'
+/** S11「管理注册…」虚拟项哨兵（NUL 前缀，包名不可能含 NUL——沿用既有哨兵惯例） */
+const MANAGE_OPTION = '\u0000__manage__'
 const LINK_USAGE = 'lpm link <名字|路径>... [--watch] [--dry-run]'
 
 /** 手输路径：3 次重试（镜像 ternaryOriginal 的手动通道）；取消 → CANCELLED；耗尽 → [] */
@@ -818,11 +820,12 @@ async function addScanDir(): Promise<void> {
   }
 }
 
-/** 主列表多选（spec §4.5 + §4.10）：快捷组（虚拟项）+ 分组 + 「其他…」；返回 targets 与「是否集合级操作」 */
+/** 主列表多选（spec §4.5 + §4.10）：快捷组（虚拟项）+ 分组 + 「其他…」+ S11「管理注册…」；
+ *  返回 kind 联合：'link'（targets + collectionLevel）/'manage'（勾选「管理注册…」）/ CANCELLED */
 async function pickLinkTargets(
   cand: { registered: LinkCandidate[]; discovered: DiscoveredLib[] },
   lastNames: readonly string[],
-): Promise<{ targets: string[]; collectionLevel: boolean } | typeof CANCELLED> {
+): Promise<{ kind: 'link'; targets: string[]; collectionLevel: boolean } | { kind: 'manage' } | typeof CANCELLED> {
   const groups: Record<string, Array<{ value: string; label: string; hint?: string }>> = {}
   // S10「快捷」组：虚拟项（提交后展开并入勾选集合；本身不是最终 target）
   const shortcuts: Array<{ value: string; label: string; hint?: string }> = []
@@ -856,10 +859,16 @@ async function pickLinkTargets(
     }))
   }
   groups['其他'] = [{ value: OTHER_OPTION, label: '其他…（手输路径）', hint: '绝对 / 相对 / 多个用空格分隔 / 含空格加引号' }]
+  // S11「管理注册…」：减法操作入口，在「其他…」之后；无注册时隐藏（spec §4.5 / §8 自决 5）
+  if (cand.registered.length > 0) {
+    groups['管理'] = [{ value: MANAGE_OPTION, label: '管理注册…', hint: '删除 lib 注册（已链接的请先 unlink）' }]
+  }
 
   const picked = await clack.groupMultiselect({ message: '选择要链接的库（空格勾选，回车确认）', options: groups })
   if (clack.isCancel(picked)) return CANCELLED
   const pickedArr = picked as string[]
+  // S11：勾选含「管理注册…」→ 转向管理（忽略其它勾选项；管理是流程转向，不混入链接意图——spec P1-2）
+  if (pickedArr.includes(MANAGE_OPTION)) return { kind: 'manage' }
   const collectionLevel = pickedArr.includes(ALL_REGISTERED) || pickedArr.includes(LAST_LINKED)
   const registeredKeys = new Set(cand.registered.map((c) => c.key))
   const values: string[] = []
@@ -881,7 +890,7 @@ async function pickLinkTargets(
     if (raws === CANCELLED) return CANCELLED
     values.push(...raws)
   }
-  return { targets: values, collectionLevel }
+  return { kind: 'link', targets: values, collectionLevel }
 }
 
 /** 计划 → 预览 → 一次确认 → 执行（spec §4.4 / §4.11）；空态手输路径也走这里 */
@@ -960,7 +969,9 @@ async function runLinkInteractive(opts: LinkOptions, cwd: string): Promise<numbe
   const traceChanges: LastRunTrace['changes'] = []
   const traceInstalls: LastRunTrace['installs'] = []
   try {
-    const { rootDir, ws, cfg, pm } = await linkPreflight(cwd)
+    const pre = await linkPreflight(cwd)
+    const { rootDir, ws, pm } = pre
+    let cfg = pre.cfg                                   // S11：必须可重读（子界面删除会写盘 lpm.config.json——spec P1-5）
     traceRoot = rootDir
     tracePm = pm
     const st = await readState(rootDir)
@@ -972,6 +983,13 @@ async function runLinkInteractive(opts: LinkOptions, cwd: string): Promise<numbe
         for (const n of cand.scanNotes) process.stdout.write(`${n}\n`)
         const picked = await pickLinkTargets(cand, lastNames)
         if (picked === CANCELLED) { process.stdout.write('已取消\n'); return 1 }
+        if (picked.kind === 'manage') {
+          // S11：进入注册管理子界面（动态 import 规避 link ⇄ forget 静态循环）；返回后重读 cfg 再重扫
+          const { runManageRegistry } = await import('./forget.js')
+          await runManageRegistry({ rootDir, cwd, ws, cfg, st })
+          cfg = await readProjectConfig(rootDir)   // ★ 子界面已删注册——重读，否则 collectLinkCandidates 用旧 cfg（spec P1-5）
+          continue
+        }
         if (picked.targets.length === 0) { process.stdout.write('未选择任何库\n'); return 1 }
         return await runPlanAndExecute(picked.targets, { opts, rootDir, cwd, ws, cfg, pm, st, traceChanges, traceInstalls }, picked.collectionLevel)
       }

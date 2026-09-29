@@ -24,7 +24,7 @@
 
 | 不做 | 归属 / 依据 |
 |---|---|
-| 注册管理（link 主列表里的「管理注册…」子界面 = forget 的交互化） | S11；PRD §14 行 410 把「forget 交互化（集成进 link 无参数列表的「管理注册…」）」写在 S11 交付物 |
+| 注册管理（link 主列表里的「管理注册…」子界面 = forget 的交互化） | S11；PRD §14 行 410 把「forget 交互化（集成进 link 无参数列表的「管理注册…」）」写在 S11 交付物（**已落地（S11 回写，2026-09-29）**：`lpm forget` 直通 +「管理注册…」子界面 + `lpm dir` 均已交付） |
 | 主列表虚拟项「全部已注册」「上次链接的」 | S10（`--last` / `--all` / `--preset` 三者的交互入口，PRD §14 行 409） |
 | `lpm forget` / `lpm dir` 直通命令 | S11 |
 | `status` / `repair` 的命令面改动 | S8 已定稿；PRD §7 行 262–263 |
@@ -64,7 +64,7 @@ lpm link [--watch] [--dry-run]
         └─ readUserConfig().scanDirs → 直接子目录扫描 → 未注册候选
         └─ last.json（readLast）→ 虚拟项「上次链接的」（有记录时）**——S10 追加**
   A7  空态？两组皆空 → 向导（输路径 / 加扫描目录 / 退出）（§4.7）
-  A8  主列表多选（clack.groupMultiselect）→ 选中集合（**S10 追加**：「快捷」组虚拟项展开 / 已注册 key / 扫描发现 key / 手输路径解析出的 target）
+  A8  主列表多选（clack.groupMultiselect）→ 选中集合（**S10 追加**：「快捷」组虚拟项展开 / 已注册 key / 扫描发现 key / 手输路径解析出的 target；**S11 追加**：「管理注册…」在「其他…」之后，勾选集合含它 → 转向注册管理子界面并忽略其它勾选项）
   A9  构建计划（与直通共用 buildLinkPlan：注册 upsert、三态判定 ternaryOriginal、B4 让选、批量改写、install、watch）
   A10 【闸门】打印执行计划预览（§4.4） → clack.confirm(默认否)
         ├─ dry-run 组合：只打印，不确认、不执行 → exit 0
@@ -223,7 +223,7 @@ export class PathInputError extends Error {}
 
 **退出码单源**：本 spec 的退出码口径**只在 §4.10 定义**；§5 与 §8 出现的退出码均为引用，若两者与 §4.10 冲突，以 §4.10 为准。
 
-**写盘面（交付视角）**：交互模式相对直通**新增的唯一写盘点**是空态向导里的「添加扫描目录」（写用户级 `~/.lpm/config.json`，PRD §9 行 303）；它可手删、也可由 S11 的 `lpm dir rm` 撤销——不引入新的不可逆面。
+**写盘面（交付视角）**：交互模式相对直通**新增的唯一写盘点**是空态向导里的「添加扫描目录」（写用户级 `~/.lpm/config.json`，PRD §9 行 303）；它可手删、也可由 S11 的 `lpm dir rm` 撤销——不引入新的不可逆面。（**已兑现（S11 回写，2026-09-29）**：`lpm dir rm <路径>` 已落地，见 S11 spec §4.7；「可手删」指用户直接编辑 `~/.lpm/config.json`，两条路都存在。）
 
 ### 4.5 link 交互行为契约
 
@@ -235,6 +235,7 @@ export class PathInputError extends Error {}
 | 已注册（N） | `cfg.libs` 的键；label = `包名`；hint 显示相对路径 | `★` 命中依赖（按命中成员数降序置顶）；`[已链接]`（state 有条目）时 hint 写「已链接，将跳过」；零命中时 hint 写「未在依赖中，链接前需先 pnpm add」 |
 | 扫描发现（M） | `scanDirs` 直接子目录里的未注册库（§4.9） | `[未注册]` + 目录标签（**绝对路径原样**，与 §4.9 的展示口径一致）；**★ / 零命中标记的规则与「已注册」组完全相同**（同一个 `hitMembers` 判定，见下） |
 | 其他…（固定一项） | 手输路径入口；**本身不是最终勾选项** | label 带格式引导：`绝对 / 相对 / 多个用空格分隔 / 含空格加引号` |
+| 管理注册…——**S11 追加** | 减法操作入口（forget 的交互化）；`registered > 0` 时出现（无注册隐藏） | 虚拟项：**本身不是最终勾选项**；勾选集合含它 → 返回 `{ kind: 'manage' }` 转向注册管理子界面并忽略其它勾选项（S11 spec §4.5） |
 
 - **分组渲染**用 `clack.groupMultiselect`（含组级全选）；无「扫描发现」候选时该组不出现
 - **「勾选 [已链接] 项即时提示」**（PRD §16 已采纳项）落在 **label / hint 文本**上（clack 不提供 toggle 回调）+ **预览里的「已链接跳过：」明细行**——用户在下手前就能看到，无需等执行完（判定记录见 §8 自决 1）
@@ -306,7 +307,7 @@ export class PathInputError extends Error {}
 当前没有已链接的库。
   lpm link    把依赖切到本地目录联调
   lpm status  核对三方状态
-  lpm forget  移除 lib 注册（待 S11 上线）
+  lpm forget  移除 lib 注册
 ```
 exit 0（信息性告知，非错误；§8 自决 2、5）。
 
@@ -427,6 +428,7 @@ runLink(targets, opts, cwd)
 - `--watch` 透传：交互选中后 watch 行出现（沿用既有 watch 断言形态）
 - 三态/B4 在预览之前问完：断言 `select` 调用发生在 `confirm` 之前（顺序断言）
 - **S10 追加**：「快捷」组两项的出现条件 / N 口径（渲染期不做注册表过滤）/ 勾选后展开与失效名字剔除 / 虚拟项触发的 last 刷新（仅 1 个也刷新）
+- **S11 追加**：主列表「管理注册…」项（`registered > 0` 时出现且位于「其他…」之后 / `registered === 0` 时不出现）；勾选 → 返回 `{ kind: 'manage' }` → 子界面删除后返回主列表重扫重渲染（钉 cfg 重读）；勾选「管理注册…」+ 其它项 → 忽略其它项（不混入链接意图）；组的顺序钉：快捷 → 已注册 → 扫描发现 → 其他 → 管理注册…
 
 **`tests/unit/unlink-interactive.test.ts`（新）**
 - 无参数 + 非 TTY → 提示 + exit 1，零菜单调用
@@ -471,7 +473,7 @@ runLink(targets, opts, cwd)
 2. **退出码口径**：空态告知 / 向导选「退出」→ 0；取消 / 空选中 / 确认答否 → 1。理由：前者是「如实告知无事可做」（与 `status` 的 exit 0 同精神），后者是「用户中止了未完成的操作」（与 S7 `LinkCancelledError`、S8 `RepairCancelled` 的 exit 1 同口径）。
 3. **交互模式的留痕**：成功/失败仍走既有 `writeRunTrace`；**取消发生在计划阶段（无写盘）→ 不写留痕**，沿用 S7/S8「无动作不写」的早退惯例（`progress.md` T2 Ruling）。落地时区分两种取消（实现期裁定 2）：**闸门取消（预览确认答否 / Ctrl+C）走内联 `return 1`，不写失败留痕**；而 `buildLinkPlan` 内用户在弹出的**三态/B4 让选里主动取消**仍抛既有 `LinkCancelledError` → 走既有 catch → **照常写失败留痕**。另：`collectLinkedItems` 对判定面 `scanLinkState` 用**动态 import**（规避 `status ⇄ unlink` 静态循环依赖，实现期裁定 3）。
 4. **加扫描目录后回主列表**：向导内写盘成功后**重新扫描并重渲染主列表**，不退出——否则用户加完目录还得重跑命令。
-5. **unlink 空态三去向的 forget 行**：PRD §8.5 字面写三去向，但 S9 期 `lpm forget` 仍是 stub（`registry.ts:15` `plannedSpec: 'S11'`）。保留该行但注「待 S11 上线」——既不违背 PRD，也不引导用户去跑一个未实现的命令。
+5. **unlink 空态三去向的 forget 行**：PRD §8.5 字面写三去向，但 S9 期 `lpm forget` 仍是 stub（`registry.ts:15` `plannedSpec: 'S11'`）。保留该行但注「待 S11 上线」——既不违背 PRD，也不引导用户去跑一个未实现的命令。（**已兑现（S11 回写，2026-09-29）**：`lpm forget` 已上线，该注已去除，空态三去向如实展示。）
 6. **路径输入用 `clack.text`**（既有先例，`link.ts:214` / `use.ts` 同型），不用 `clack.path`（它带文件浏览器形态，S9 未做对齐冒烟）。
 7. **无目标 + `--dry-run`**：进交互、选完后只打印计划不执行、exit 0。理由：`--dry-run` 的语义是「零副作用」，与交互模式组合时应保持最高优先级。
 8. **corrupt 项在 unlink 列表照常显示**（标 `[记录损坏]`）且**保持可选**；选中后在构建计划**之前**前置剔除 + 提示（§4.6），而不是让 `LinkStateCorruptError` 炸掉整批。理由：保留可见性与「为什么不能用」的解释路径，同时不连累同批（自审 P1 的裁决；与 §8 自决 9 同族）。

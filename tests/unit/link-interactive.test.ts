@@ -9,12 +9,12 @@ vi.mock('node:os', async (importOriginal) => {
   return { ...actual, homedir: () => (osMock.home !== '' ? osMock.home : actual.homedir()) }
 })
 vi.mock('@clack/prompts', () => ({
-  select: vi.fn(), groupMultiselect: vi.fn(), confirm: vi.fn(), text: vi.fn(), isCancel: vi.fn(() => false),
+  select: vi.fn(), groupMultiselect: vi.fn(), confirm: vi.fn(), text: vi.fn(), note: vi.fn(), multiselect: vi.fn(), isCancel: vi.fn(() => false),
 }))
 vi.mock('execa', () => ({ execa: vi.fn() }))
 
 import { execa } from 'execa'
-import { select, groupMultiselect, confirm, text, isCancel } from '@clack/prompts'
+import { select, groupMultiselect, confirm, text, note, multiselect, isCancel } from '@clack/prompts'
 import { runLink } from '../../src/commands/link.js'
 
 const dirs: string[] = []
@@ -567,5 +567,111 @@ describe('link 主列表「快捷」组（spec §4.10）', () => {
     expect(cap.out.join('')).toContain('无待执行变更')                          // keep 空 → 早退分支
     // 判别力：不修时该分支在 buildLinkPlan 之前 return，不写 last → 终态仍是 ['@t/bad']；修复后刷新到 links 全集 ['@t/x']
     expect(JSON.parse(readFileSync(join(ws, '.lpm', 'last.json'), 'utf8')).names).toEqual(['@t/x'])
+  })
+})
+
+describe('link 主列表「管理注册…」（S11）', () => {
+  it('LI-S11-1：registered > 0 时「管理注册…」出现在「其他…」之后', async () => {
+    const lib = makeLib()
+    const ws = makeWs()
+    registerLib(ws, '@t/lib', lib)
+    stubTty(true); makeHome()
+    vi.mocked(groupMultiselect).mockResolvedValueOnce(['\u0000__manage__'] as never)
+    vi.mocked(isCancel).mockReturnValueOnce(true)   // 第一轮即取消 → 不进子界面（零副作用可断言 options）
+    const cap = captureOut()
+    const code = await runLink([], {}, ws)
+    expect(code).toBe(1)
+    const groups = vi.mocked(groupMultiselect).mock.calls[0]?.[0] as { options: Record<string, unknown[]> }
+    const keys = Object.keys(groups.options)
+    expect(keys).toContain('管理')
+    expect(keys.indexOf('管理')).toBeGreaterThan(keys.indexOf('其他'))
+    expect(note).not.toHaveBeenCalled()   // 未真正进子界面
+  })
+
+  it('LI-S11-2：勾选「管理注册…」→ 进入子界面 → 完成后重扫重渲染', async () => {
+    const lib = makeLib()
+    const ws = makeWs()
+    registerLib(ws, '@t/lib', lib)
+    stubTty(true); makeHome()
+    vi.mocked(groupMultiselect)
+      .mockResolvedValueOnce(['\u0000__manage__'] as never)   // 第一轮：进管理
+      .mockResolvedValueOnce([] as never)                     // 第二轮：子界面返回后重扫，主列表空选
+    vi.mocked(multiselect).mockResolvedValueOnce([] as never) // 子界面空删除集合 → 返回 'back'
+    vi.mocked(isCancel).mockReturnValue(false)
+    const cap = captureOut()
+    const code = await runLink([], {}, ws)
+    expect(code).toBe(1)                                   // 第二轮空选 → 未选择任何库
+    expect(groupMultiselect).toHaveBeenCalledTimes(2)      // 子界面完成后确实重扫重渲染
+    expect(cap.out.join('')).toContain('未选择任何注册')     // 子界面确实跑过（空删除集合提示）
+  })
+
+  it('LI-S11-3：子界面删除注册后重扫拿到新注册表（钉 cfg 重读，spec P1-5）', async () => {
+    const libA = makeLib('@t/a')
+    const libB = makeLib('@t/b')
+    const ws = makeWs()
+    registerLib(ws, '@t/a', libA)
+    registerLib(ws, '@t/b', libB)
+    stubTty(true); makeHome()
+    vi.mocked(groupMultiselect)
+      .mockResolvedValueOnce(['\u0000__manage__'] as never)   // 第一轮：进管理
+      .mockResolvedValueOnce([] as never)                     // 第二轮：主列表空选 → 未选择任何库
+    vi.mocked(multiselect).mockResolvedValueOnce(['@t/a'] as never)   // 子界面多选删 @t/a
+    vi.mocked(confirm).mockResolvedValueOnce(true as never)           // 子界面二次确认
+    vi.mocked(isCancel).mockReturnValue(false)
+    const cap = captureOut()
+    const code = await runLink([], {}, ws)
+    expect(code).toBe(1)
+    expect(cap.out.join('')).toContain('已移除注册：@t/a')
+    // 钉：第二轮 collectLinkCandidates 拿到的 registered 不含 @t/a
+    // （若实现沿用 preflight 旧 cfg，@t/a 仍会出现在第二轮主列表——断言必红）
+    const groups2 = vi.mocked(groupMultiselect).mock.calls[1]?.[0] as { options: Record<string, Array<{ value: string }>> }
+    const allValues = Object.values(groups2.options).flat().map((o) => o.value)
+    expect(allValues).not.toContain('@t/a')
+    expect(allValues).toContain('@t/b')
+  })
+
+  it('LI-S11-4：勾选「管理注册…」+ 其它项 → 忽略其它项（只进管理，不混入链接意图）', async () => {
+    const lib = makeLib()
+    const ws = makeWs()
+    registerLib(ws, '@t/lib', lib)
+    stubTty(true); makeHome()
+    vi.mocked(groupMultiselect)
+      .mockResolvedValueOnce(['\u0000__manage__', '@t/lib'] as never)   // 同时勾了链接项 + 管理项
+      .mockResolvedValueOnce([] as never)
+    vi.mocked(multiselect).mockResolvedValueOnce([] as never)   // 子界面空删除集合
+    vi.mocked(isCancel).mockReturnValue(false)
+    const cap = captureOut()
+    const code = await runLink([], {}, ws)
+    expect(code).toBe(1)
+    expect(cap.out.join('')).not.toContain('执行计划预览：')   // 未进入链接执行管线
+    expect(confirm).not.toHaveBeenCalled()                    // 子界面空删除集合不弹二次确认
+    expect(cap.out.join('')).toContain('未选择任何注册')        // 子界面确实被进入（空删除集合提示）
+  })
+
+  it('LI-S11-5：registered === 0 时走空态向导（主列表与「管理注册…」均不出现）', async () => {
+    const ws = makeWs()   // libs 为空
+    stubTty(true); makeHome()
+    vi.mocked(select).mockResolvedValueOnce('quit' as never)
+    const code = await runLink([], {}, ws)
+    expect(code).toBe(0)
+    expect(groupMultiselect).not.toHaveBeenCalled()   // 主列表（含管理项）根本没渲染
+  })
+
+  it('LI-S11-5b：registered === 0 但 discovered > 0 → 主列表渲染，且「管理」不出现、「其他」在（spec §6 判别场景）', async () => {
+    const scan = join(mkdtempSync(join(tmpdir(), 'lpm-scan-')), 'x')
+    dirs.push(join(scan, '..'))
+    mkdirSync(join(scan, 'lib-x'), { recursive: true })
+    writeFileSync(join(scan, 'lib-x', 'package.json'), JSON.stringify({ name: '@t/found' }), 'utf8')
+    const ws = makeWs()   // libs 为空 → registered === 0（仅 discovered 非空）
+    stubTty(true)
+    const home = makeHome()
+    writeFileSync(join(home, '.lpm', 'config.json'), JSON.stringify({ version: 1, scanDirs: [scan] }), 'utf8')
+    vi.mocked(groupMultiselect).mockResolvedValueOnce([] as never)   // 空选：只读 options，不进执行
+    captureOut()
+    expect(await runLink([], {}, ws)).toBe(1)              // 空选中 → exit 1
+    expect(groupMultiselect).toHaveBeenCalledTimes(1)      // 主列表确实被渲染（未走空态向导）
+    const arg = vi.mocked(groupMultiselect).mock.calls[0]![0] as { options: Record<string, unknown> }
+    expect(arg.options['管理']).toBeUndefined()            // registered === 0 → 「管理注册…」不出现（spec §6）
+    expect(arg.options['其他']).toBeDefined()              // 「其他…（手输路径）」恒在
   })
 })
