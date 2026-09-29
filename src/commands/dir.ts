@@ -36,12 +36,14 @@ async function runDirAdd(dir: string, opts: { dryRun?: boolean }): Promise<numbe
   if (!ok) {
     throw new DirError(`扫描目录必须是已存在的绝对路径：${trimmed}。\n下一步：示例：D:\\Seed\\libs`)
   }
+  // 先读用户配置再短路 dry-run（OCR-2：corrupt 配置下 dry-run 与真实执行一致报 exit 1）；
+  // includes 去重检查在 dry-run 跳过（spec §8 自决 11：真实执行已存在时也照报「已加入」）
+  const cur = await readUserConfig()
   if (opts.dryRun === true) {
     const view: PlanView = { entries: [{ kind: 'line', text: `将加入扫描目录：${trimmed}` }], install: null, watch: [] }
     process.stdout.write(renderPlan(view, 'dry-run'))
     return 0
   }
-  const cur = await readUserConfig()
   if (!cur.scanDirs.includes(trimmed)) {
     await writeUserConfig({ ...cur, scanDirs: [...cur.scanDirs, trimmed] })
   }

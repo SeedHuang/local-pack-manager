@@ -269,4 +269,16 @@ describe('lpm dir --dry-run（S12 spec §4.4/§4.5）', () => {
     expect(cap.err.join('')).toContain('--dry-run 仅直通模式适用')
     expect(multiselect).not.toHaveBeenCalled()
   })
+
+  it('S12-D-DR5：add --dry-run + corrupt 用户配置 → 照样报错 exit 1（OCR-2 回归钉：先读配置再短路）', async () => {
+    const home = makeHome()
+    writeFileSync(join(home, '.lpm', 'config.json'), '{ not valid json', 'utf8')
+    const scan = join(home, 'scan-dir')
+    mkdirSync(scan, { recursive: true })
+    const cap = captureOut()
+    const code = await runDir(['add', scan], process.cwd(), { dryRun: true })
+    expect(code).toBe(1)
+    expect(cap.err.join('')).toContain('不是合法 JSON')
+    expect(readFileSync(join(home, '.lpm', 'config.json'), 'utf8')).toBe('{ not valid json')
+  })
 })

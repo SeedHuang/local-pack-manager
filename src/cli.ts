@@ -35,7 +35,7 @@ export function suggestCommand(raw: string, candidates: readonly string[] = COMM
   let best = MAX
   const hits: string[] = []
   for (const c of candidates) {
-    if (c.length <= 1) continue
+    if (c.length <= 1) continue // 1 字符候选不猜（与 commander suggestSimilar 同规约；默认 COMMANDS 全 ≥3 字符，此守卫服务自定义 candidates 的调用方）
     const dd = dist(raw, c)
     if (dd < best) { best = dd; hits.length = 0; hits.push(c) }
     else if (dd === best) hits.push(c)

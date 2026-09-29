@@ -85,16 +85,16 @@ export function validateEntry(key: string, entry: LinkState['links'][string] | u
   }
   const o = entry.original
   if (o === null || typeof o !== 'object' || Array.isArray(o)) {
-    throw new LinkStateCorruptError(key, `state 条目损坏：${key} 的 original 不是对象。手工逃生三步：${ESCAPE_HATCH}`)
+    throw new LinkStateCorruptError(key, `state 条目损坏：${key} 的 original 不是对象。\n下一步：手工逃生三步：${ESCAPE_HATCH}`)
   }
   const keys = Object.keys(o)
   if (keys.length === 0) {
-    throw new LinkStateCorruptError(key, `state 条目损坏：${key} 的 original 为空对象。手工逃生三步：${ESCAPE_HATCH}`)
+    throw new LinkStateCorruptError(key, `state 条目损坏：${key} 的 original 为空对象。\n下一步：手工逃生三步：${ESCAPE_HATCH}`)
   }
   for (const k of keys) {
     const v = (o as Record<string, unknown>)[k]
     if (typeof v !== 'string' || v === '') {
-      throw new LinkStateCorruptError(key, `state 条目损坏：${key} 的 original["${k}"] 应为非空字符串。手工逃生三步：${ESCAPE_HATCH}`)
+      throw new LinkStateCorruptError(key, `state 条目损坏：${key} 的 original["${k}"] 应为非空字符串。\n下一步：手工逃生三步：${ESCAPE_HATCH}`)
     }
   }
   return o as Record<string, string>
@@ -299,7 +299,7 @@ async function buildUnlinkPlan(args: {
           continue
         }
         if (!process.stdin.isTTY) {
-          throw new LinkInteractionError('conflict-ternary', `检测到手动改动（${rel}：当前 ${representative} vs original ${origValue}），需交互确认。请手动处理该文件后重试，或先 lpm unlink --dry-run 查看`)
+          throw new LinkInteractionError('conflict-ternary', `检测到手动改动（${rel}：当前 ${representative} vs original ${origValue}），需交互确认。\n下一步：手动处理该文件后重试，或先 lpm unlink --dry-run 查看`)
         }
         const picked = await clack.select({
           message: `检测到手动改动（${rel}），选择处理方式`,
@@ -667,7 +667,7 @@ export async function runUnlink(targets: readonly string[], opts: UnlinkOptions,
   try {
     // A2 互斥（spec §5 #3）
     if (opts.all === true && targets.length > 0) {
-      throw new LinkArgumentError('--all', '--all 与显式目标互斥')
+      throw new LinkArgumentError('--all', '--all 与显式目标互斥。\n下一步：要取消指定目标请直接给名字或路径')
     }
     // A workspace + PM（统一前置）
     const { rootDir, cfg, pm } = await unlinkPreflight(cwd)

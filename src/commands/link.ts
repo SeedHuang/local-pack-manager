@@ -119,7 +119,7 @@ export async function resolveTarget(raw: string, cfg: ProjectLpmConfig | null, r
   const registered = libs !== undefined && Object.hasOwn(libs, raw) ? libs[raw] : undefined
   if (registered !== undefined) {
     if (typeof registered !== 'string') {
-      throw new LinkArgumentError(raw, `注册值损坏：libs["${raw}"] 应为字符串相对路径。请修正 lpm.config.json。`)
+      throw new LinkArgumentError(raw, `注册值损坏：libs["${raw}"] 应为字符串相对路径。\n下一步：修正 lpm.config.json`)
     }
     return { key: raw, libDirAbs: join(rootDir, ...registered.split('/')), source: 'name' }
   }
@@ -138,7 +138,7 @@ export async function resolveTarget(raw: string, cfg: ProjectLpmConfig | null, r
 export async function resolveMonorepo(libDirAbs: string): Promise<{ libDirAbs: string; name: string }> {
   if (!existsSync(join(libDirAbs, 'package.json'))) {
     if (!existsSync(join(libDirAbs, 'pnpm-workspace.yaml'))) {
-      throw new LibCheckError('manifest-missing', libDirAbs, `${libDirAbs} 不是 npm 包（缺 package.json）。请确认路径指向包目录。`)
+      throw new LibCheckError('manifest-missing', libDirAbs, `${libDirAbs} 不是 npm 包（缺 package.json）。\n下一步：确认路径指向包目录`)
     }
     const members = await listWorkspaceMembers(libDirAbs)
     return pickMember(libDirAbs, members)

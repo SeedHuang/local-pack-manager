@@ -427,4 +427,8 @@ cli.ts 接线：`runForget(targets, undefined, { dryRun: options.dryRun })` 等�
 
 ### OCR 评审轮
 
-（用户提交后执行，diff 模式 `7a3e375..<新 HEAD>`，命令行落盘 `ocr-cmd.txt`）
+- 运行（diff 模式，用户提交 `6f645e2` 后）：`ocr review --audience agent --background "<S12 上下文>" --from 7a3e3752908a4bce42f6ae1a2b11087174100da9 --to 6f645e2f657cf34a1086d05f8db0312817bb0f1e --exclude "docs/**,**/*.md" --output .../ocr-out-s12-review.txt`（命令行 + Summary 落盘 `ocr-cmd.txt`）
+- 结果：**14 file(s) / 8 comment(s) / ~4.86M tokens / 6m21s**；0 critical / 0 high
+- **修复波（controller 直改，8 意见全处置）**：7 ADDRESSED——① dir add `--dry-run` 校验前短路 bug（改先读配置再短路 + 回归钉 S12-D-DR5）；② unlink `LinkStateCorruptError` 三分支 + `conflict-ternary` + `--all 互斥`；③ workspace `yamlError` + `listWorkspaceMembers` invalid-root；④ link `注册值损坏` + LibCheckError；⑤ cli `length<=1` 守卫注释。1 P2 候选（OCR-8 交互拒绝消息抽 helper，触发信号 = 第四个命令接入）
+- **终态（修复波后，controller 实跑 `pnpm verify`）**：exit 0 = typecheck 0 + build + unit **29 文件 / 518 例** + e2e **1 文件 / 40 例**
+- 修复波未提交面：`M` 6 项（unlink.ts、workspace.ts、link.ts、dir.ts、cli.ts、dir-command.test.ts），用户待 commit

@@ -113,7 +113,7 @@ function isDir(p: string): boolean {
 function yamlError(yamlPath: string, reason: string): ManifestParseError {
   return new ManifestParseError(
     yamlPath,
-    `pnpm-workspace.yaml 解析失败：${yamlPath}（${reason}）。lpm 仅支持 pnpm 默认风格的 packages 列表（2 空格缩进）；复杂 YAML 请简化后重试。`,
+    `pnpm-workspace.yaml 解析失败：${yamlPath}（${reason}）。\n下一步：lpm 仅支持 pnpm 默认风格的 packages 列表（2 空格缩进）；复杂 YAML 请简化后重试`,
   )
 }
 
@@ -355,7 +355,7 @@ export async function listWorkspaceMembers(rootDir: string): Promise<PackageJson
   if (!existsSync(yamlPath)) {
     throw new WorkspaceNotFoundError(
       'invalid-root',
-      `${rootDir} 不是 npm 包（缺 package.json）且缺 pnpm-workspace.yaml，无法作为 lib 链接。请确认路径指向包目录或 pnpm monorepo 根。`,
+      `${rootDir} 不是 npm 包（缺 package.json）且缺 pnpm-workspace.yaml，无法作为 lib 链接。\n下一步：确认路径指向包目录或 pnpm monorepo 根`,
     )
   }
   const patterns = parsePackagesYaml(readFileSync(yamlPath, 'utf8'), yamlPath)
