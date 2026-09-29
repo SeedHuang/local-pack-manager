@@ -81,7 +81,7 @@ function reportError(err: unknown): number {
  *  （S8 §4.3：扩为导出，供 status/repair 复用条目结构校验；定义与行为零变化） */
 export function validateEntry(key: string, entry: LinkState['links'][string] | undefined): Record<string, string> {
   if (entry === undefined) {
-    throw new LinkStateCorruptError(key, `state 条目损坏：${key} 的 original 缺失。手工逃生三步：${ESCAPE_HATCH}`)
+    throw new LinkStateCorruptError(key, `state 条目损坏：${key} 的 original 缺失。\n下一步：手工逃生三步：${ESCAPE_HATCH}`)
   }
   const o = entry.original
   if (o === null || typeof o !== 'object' || Array.isArray(o)) {

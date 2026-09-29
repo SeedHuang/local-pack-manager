@@ -19,6 +19,7 @@ import {
 import type { LinkState, ProjectLpmConfig } from '../state/types.js'
 import { PresetError, readPresets } from './preset.js'
 import { collectLinkCandidates, parsePathInput, type LinkCandidate } from './link.js'
+import { renderPlan, type PlanView } from './plan-view.js'
 
 /** forget 相关错误（命令域；沿用「错误类归命令文件」先例） */
 export class ForgetError extends Error {
@@ -66,8 +67,8 @@ function resolveForgetKey(raw: string, cfg: ProjectLpmConfig | null, rootDir: st
   const notFound = (): never => {
     throw new ForgetError(
       Object.keys(cfg?.libs ?? {}).length === 0
-        ? '当前没有任何已注册的 lib。用 lpm link <路径> 注册'
-        : `注册不存在：${raw}。已注册：${registeredList(cfg)}`,
+        ? '当前没有任何已注册的 lib。\n下一步：用 lpm link <路径> 注册'
+        : `注册不存在：${raw}。\n下一步：检查拼写后重试；已注册：${registeredList(cfg)}`,
     )
   }
   if (cfg !== null && Object.hasOwn(cfg.libs, raw)) return [raw]
@@ -104,7 +105,7 @@ function printPresetHints(cfg: ProjectLpmConfig | null, deleted: ReadonlySet<str
 }
 
 /** 直通删除（spec §4.4）：先全部校验通过再一次性写盘；删空保留 libs: {} */
-async function forgetDirect(targets: readonly string[], rootDir: string, cwd: string): Promise<number> {
+async function forgetDirect(targets: readonly string[], rootDir: string, cwd: string, opts: { dryRun?: boolean }): Promise<number> {
   const cfg = await readProjectConfig(rootDir)
   const st = await readState(rootDir)
   // 1. 解析 + 去重（Set 化，spec §8 自决 9）
@@ -118,14 +119,20 @@ async function forgetDirect(targets: readonly string[], rootDir: string, cwd: st
   // 2. 已链接拦截（整批停；drift 也算已链接——state 有条目即拦）
   for (const key of keys) {
     if (Object.hasOwn(st?.links ?? {}, key)) {
-      throw new ForgetError(`${key} 当前已链接。先 lpm unlink ${key} 取消链接，或改用 lpm unlink——lpm 不会同时拆线与删档`)
+      throw new ForgetError(`${key} 当前已链接。\n下一步：先 lpm unlink ${key} 取消链接，或改用 lpm unlink——lpm 不会同时拆线与删档`)
     }
   }
-  // 3. 写盘（删空保留 libs: {}——移除字段会让 readProjectConfig 抛错）
+  // 3. dry-run（S12 §4.4）：校验全跑后打印计划零写盘；预设提示是删除后的通知，dry-run 不适用（§8 自决 5）
+  if (opts.dryRun === true) {
+    const view: PlanView = { entries: [{ kind: 'line', text: `将移除注册：${keys.join('、')}` }], install: null, watch: [] }
+    process.stdout.write(renderPlan(view, 'dry-run'))
+    return 0
+  }
+  // 4. 写盘（删空保留 libs: {}——移除字段会让 readProjectConfig 抛错）
   const next: Record<string, string> = { ...(cfg?.libs ?? {}) }
   for (const key of keys) delete next[key]
   await writeProjectConfig(rootDir, { ...(cfg ?? { version: 1, libs: {} }), libs: next })
-  // 4. 成功提示（在前）→ 预设提示（在后）
+  // 5. 成功提示（在前）→ 预设提示（在后）
   for (const key of keys) process.stdout.write(`已移除注册：${key}，以后想再联调需重新带路径注册\n`)
   printPresetHints(cfg, seen)
   return 0
@@ -226,9 +233,13 @@ export async function runManageRegistry(ctx: ManageRegistryCtx): Promise<'back'>
 }
 
 /** `lpm forget` 入口：[] → 非 TTY 提示 / TTY 进子界面（T3 实现）；[targets...] → 直通 */
-export async function runForget(targets: readonly string[], cwd: string = process.cwd()): Promise<number> {
+export async function runForget(targets: readonly string[], cwd: string = process.cwd(), opts: { dryRun?: boolean } = {}): Promise<number> {
   try {
     if (targets.length === 0) {
+      if (opts.dryRun === true) {
+        process.stderr.write(`--dry-run 仅直通模式适用（交互模式自带确认与预览）；直通用法：${FORGET_USAGE} --dry-run\n`)
+        return 1
+      }
       if (process.stdin.isTTY !== true) {
         process.stdout.write(`当前不是交互终端；直通用法：${FORGET_USAGE}\n`)
         return 1
@@ -241,7 +252,7 @@ export async function runForget(targets: readonly string[], cwd: string = proces
       return 0
     }
     const rootDir = await findWorkspaceRoot(cwd)
-    return await forgetDirect(targets, rootDir, cwd)
+    return await forgetDirect(targets, rootDir, cwd, opts)
   } catch (err) {
     return reportError(err)
   }

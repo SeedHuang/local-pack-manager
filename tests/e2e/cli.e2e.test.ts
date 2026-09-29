@@ -39,10 +39,17 @@ describe('lpm CLI e2e', () => {
     expect(r.stdout).toMatch(/Usage/i)
   })
 
-  it('lpm lnik（未知命令）：exit ≠ 0，stderr 非空', async () => {
+  it('lpm lnik（未知命令）：exit ≠ 0，stderr 非空且含中文建议', async () => {
     const r = await runCli(['lnik'], cwd)
     expect(r.exitCode).not.toBe(0)
     expect(r.stderr.length).toBeGreaterThan(0)
+    expect(r.stderr).toContain('最接近的命令：link')
+  })
+
+  it('lpm staus（未知命令错拼）：stderr 含最接近的命令：status', async () => {
+    const r = await runCli(['staus'], cwd)
+    expect(r.exitCode).not.toBe(0)
+    expect(r.stderr).toContain('最接近的命令：status')
   })
 })
 
@@ -509,6 +516,23 @@ describe('lpm save e2e（S10）', () => {
     expect(r.exitCode).toBe(1)
     expect(r.stderr).toContain('三者互斥')
   })
+
+  it('E2E-S12-1：save --dry-run → exit 0 + 计划文本 + config 零写盘（冒烟）', async () => {
+    const dir = makeProject({
+      'lpm.config.json': JSON.stringify({ version: 1, libs: {} }),
+    })
+    mkdirSync(join(dir, '.lpm'), { recursive: true })
+    writeFileSync(
+      join(dir, '.lpm', 'state.json'),
+      JSON.stringify({ version: 1, links: { '@t/lib': { original: { 'package.json': '^1.0.0' }, linkedAt: '2026-01-01T00:00:00.000Z' } } }),
+      'utf8',
+    )
+    const before = readFileSync(join(dir, 'lpm.config.json'), 'utf8')
+    const r = await runCli(['save', 'x', '--dry-run'], dir)
+    expect(r.exitCode).toBe(0)
+    expect(r.stdout).toContain('dry-run 执行计划（不落任何盘、不执行任何子进程）：')
+    expect(readFileSync(join(dir, 'lpm.config.json'), 'utf8')).toBe(before)
+  })
 })
 
 // S11 e2e（spec §6）：forget 需真实 workspace fixture（判定位置在 findWorkspaceRoot 之后）；
@@ -565,6 +589,6 @@ describe('lpm dir e2e（S11）', () => {
   it('E2E-S11-5：dir 非法子命令 → exit 1 + 用法串（不写盘）', async () => {
     const r = await runCli(['dir', 'bogus'])
     expect(r.exitCode).toBe(1)
-    expect(r.stderr).toContain('用法：lpm dir add')
+    expect(r.stderr).toContain('下一步：lpm dir add')  // S12 D4 统一模板：描述行「用法错误。」+ 下一步行含用法串
   })
 })

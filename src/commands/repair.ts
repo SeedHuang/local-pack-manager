@@ -517,7 +517,7 @@ export async function runRepair(opts: RepairOptions, cwd: string = process.cwd()
       return 0
     }
     if (!process.stdin.isTTY) {
-      throw new RepairInteractionError('需交互确认修复计划。请改用 lpm repair --dry-run 查看计划')
+      throw new RepairInteractionError('需交互确认修复计划。\n下一步：改用 lpm repair --dry-run 查看计划')
     }
     printPlan(plan, pm, false)
     // 确认语口径（Minor ⑥）：install 计 1；档案动作按条目数——与实际子进程数一致（不再把一次 install 拆成 N 项）

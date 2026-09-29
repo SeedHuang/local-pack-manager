@@ -212,7 +212,7 @@ describe('lpm dir（S11）', () => {
       const cap = captureOut()
       const code = await runDir(args)
       expect(code).toBe(1)
-      expect(cap.err.join('')).toContain('用法：lpm dir add')
+      expect(cap.err.join('')).toContain('用法错误')
     }
   })
 
@@ -223,5 +223,50 @@ describe('lpm dir（S11）', () => {
     const code = await runDir(['ls'])
     expect(code).toBe(1)
     expect(cap.err.join('')).toContain('scanDirs 应为数组')
+  })
+})
+
+describe('lpm dir --dry-run（S12 spec §4.4/§4.5）', () => {
+  it('S12-D-DR1：add --dry-run → 计划文本 + 用户配置零写盘 + exit 0', async () => {
+    const home = makeHome()
+    const scan = join(mkdtempSync(join(tmpdir(), 'lpm-scan-')), 'x')
+    dirs.push(join(scan, '..'))
+    mkdirSync(scan, { recursive: true })
+    const cap = captureOut()
+    const code = await runDir(['add', scan], process.cwd(), { dryRun: true })
+    expect(code).toBe(0)
+    expect(cap.out.join('')).toContain('dry-run 执行计划（不落任何盘、不执行任何子进程）：')
+    expect(cap.out.join('')).toContain(`将加入扫描目录：${scan}`)
+    expect(existsSync(join(home, '.lpm', 'config.json'))).toBe(false)
+  })
+
+  it('S12-D-DR2：rm --dry-run → 计划文本 + 零写盘 + exit 0', async () => {
+    const home = makeHome()
+    const scan = join(home, 'scan-dir')
+    writeFileSync(join(home, '.lpm', 'config.json'), JSON.stringify({ version: 1, scanDirs: [scan] }), 'utf8')
+    const before = readFileSync(join(home, '.lpm', 'config.json'), 'utf8')
+    const cap = captureOut()
+    const code = await runDir(['rm', scan], process.cwd(), { dryRun: true })
+    expect(code).toBe(0)
+    expect(cap.out.join('')).toContain(`将移除扫描目录：${scan}`)
+    expect(readFileSync(join(home, '.lpm', 'config.json'), 'utf8')).toBe(before)
+  })
+
+  it('S12-D-DR3：ls --dry-run → 照常列出（只读不受影响）', async () => {
+    const home = makeHome()
+    writeFileSync(join(home, '.lpm', 'config.json'), JSON.stringify({ version: 1, scanDirs: [join(home, 'a')] }), 'utf8')
+    const cap = captureOut()
+    const code = await runDir(['ls'], process.cwd(), { dryRun: true })
+    expect(code).toBe(0)
+    expect(cap.out.join('')).toContain(join(home, 'a'))
+  })
+
+  it('S12-D-DR4：无参数 + --dry-run → 拒绝 + exit 1 + 零 clack 调用', async () => {
+    makeHome()
+    const cap = captureOut()
+    const code = await runDir([], process.cwd(), { dryRun: true })
+    expect(code).toBe(1)
+    expect(cap.err.join('')).toContain('--dry-run 仅直通模式适用')
+    expect(multiselect).not.toHaveBeenCalled()
   })
 })

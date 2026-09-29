@@ -63,7 +63,7 @@ function readManifest(manifestPath: string): Record<string, unknown> {
   } catch {
     throw new ManifestParseError(
       manifestPath,
-      `清单解析失败：${manifestPath}（无法读取文件）。请确认文件存在且可读。`,
+      `清单解析失败：${manifestPath}（无法读取文件）。\n下一步：确认文件存在且可读后重试`,
     )
   }
   let parsed: unknown
@@ -72,13 +72,13 @@ function readManifest(manifestPath: string): Record<string, unknown> {
   } catch (e) {
     throw new ManifestParseError(
       manifestPath,
-      `清单解析失败：${manifestPath}（${(e as Error).message}）。请修正 JSON 语法后重试；若该文件由其他工具生成，请先恢复原状。`,
+      `清单解析失败：${manifestPath}（${(e as Error).message}）。\n下一步：修正 JSON 语法后重试；若该文件由其他工具生成，请先恢复原状`,
     )
   }
   if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
     throw new ManifestParseError(
       manifestPath,
-      `清单解析失败：${manifestPath}（根值不是 JSON 对象）。请修正 JSON 语法后重试。`,
+      `清单解析失败：${manifestPath}（根值不是 JSON 对象）。\n下一步：修正 JSON 语法后重试`,
     )
   }
   return parsed as Record<string, unknown>
@@ -197,7 +197,7 @@ export async function findWorkspaceRoot(startDir: string): Promise<string> {
   if (!isDir(startDir)) {
     throw new WorkspaceNotFoundError(
       'start-dir-missing',
-      `路径不存在：${startDir}。请检查路径后重试。`,
+      `路径不存在：${startDir}。\n下一步：请检查路径后重试`,
     )
   }
   let current = startDir
@@ -216,7 +216,7 @@ export async function findWorkspaceRoot(startDir: string): Promise<string> {
   if (firstManifestDir !== null) return firstManifestDir
   throw new WorkspaceNotFoundError(
     'root-not-found',
-    '未找到项目根（未发现 workspace 清单或 package.json）。请进入项目目录后运行 lpm。',
+    '未找到项目根（未发现 workspace 清单或 package.json）。\n下一步：请进入项目目录后运行 lpm',
   )
 }
 
@@ -225,7 +225,7 @@ export async function loadWorkspace(rootDir: string): Promise<Workspace> {
   if (!existsSync(rootManifestPath)) {
     throw new WorkspaceNotFoundError(
       'invalid-root',
-      `${rootDir} 不是有效的项目根（缺 package.json）。请以 findWorkspaceRoot 的返回值为根。`,
+      `${rootDir} 不是有效的项目根（缺 package.json）。\n下一步：请以 findWorkspaceRoot 的返回值为根`,
     )
   }
   const rootManifest = readManifest(rootManifestPath)
@@ -296,7 +296,7 @@ function validatePatterns(patterns: string[], patternSource: string): void {
         throw new WorkspacePatternError(
           e.pattern,
           patternSource,
-          e.message.replace('）。支持：', `）。清单：${patternSource}。支持：`),
+          e.message.replace('）。\n下一步：支持：', `）。清单：${patternSource}。\n下一步：支持：`),
         )
       }
       throw e

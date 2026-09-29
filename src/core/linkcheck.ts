@@ -39,16 +39,16 @@ function readLibManifest(manifestPath: string, libDirAbs: string): Record<string
   try {
     source = readFileSync(manifestPath, 'utf8')
   } catch {
-    throw new LibCheckError('manifest-invalid', libDirAbs, `${manifestPath} 无法读取。请确认文件可读。`)
+    throw new LibCheckError('manifest-invalid', libDirAbs, `${manifestPath} 无法读取。\n下一步：确认文件可读后重试`)
   }
   let parsed: unknown
   try {
     parsed = JSON.parse(source.charCodeAt(0) === 0xfeff ? source.slice(1) : source)
   } catch (e) {
-    throw new LibCheckError('manifest-invalid', libDirAbs, `${manifestPath} 不是合法 JSON（${(e as Error).message}）。请修正后重试。`)
+    throw new LibCheckError('manifest-invalid', libDirAbs, `${manifestPath} 不是合法 JSON（${(e as Error).message}）。\n下一步：修正后重试`)
   }
   if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
-    throw new LibCheckError('manifest-invalid', libDirAbs, `${manifestPath} 不是合法的 package.json（根值不是 JSON 对象）。请修正后重试。`)
+    throw new LibCheckError('manifest-invalid', libDirAbs, `${manifestPath} 不是合法的 package.json（根值不是 JSON 对象）。\n下一步：修正后重试`)
   }
   return parsed as Record<string, unknown>
 }
@@ -96,35 +96,35 @@ function resolveEntryCandidates(libDirAbs: string, manifest: Record<string, unkn
 /** 前置检查纯函数（B5 修复落点）。步骤序与错误 kind 见 spec §4.4 C；任一失败抛 LibCheckError。 */
 export function checkLib(libDirAbs: string, opts: LibCheckOptions = {}): LibCheckOk {
   if (!isDirectory(libDirAbs)) {
-    throw new LibCheckError('dir-missing', libDirAbs, `路径不存在或不是目录：${libDirAbs}。支持绝对路径、相对路径（相对当前目录）；含空格请加引号。`)
+    throw new LibCheckError('dir-missing', libDirAbs, `路径不存在或不是目录：${libDirAbs}。\n下一步：支持绝对路径、相对路径（相对当前目录）；含空格请加引号`)
   }
   const manifestPath = join(libDirAbs, 'package.json')
   if (!existsSync(manifestPath)) {
-    throw new LibCheckError('manifest-missing', libDirAbs, `${libDirAbs} 不是 npm 包（缺 package.json）。请确认路径指向包目录。`)
+    throw new LibCheckError('manifest-missing', libDirAbs, `${libDirAbs} 不是 npm 包（缺 package.json）。\n下一步：确认路径指向包目录`)
   }
   const manifest = readLibManifest(manifestPath, libDirAbs)
   const name = typeof manifest['name'] === 'string' ? manifest['name'] : ''
   if (typeof opts.expectedName === 'string' && opts.expectedName !== '' && name !== '' && name !== opts.expectedName) {
-    throw new LibCheckError('name-mismatch', libDirAbs, `lib 实际 name（${name}）≠ 通讯录 key（${opts.expectedName}）。请更新 lpm.config.json 中 libs 键为 ${name} 后重试。`)
+    throw new LibCheckError('name-mismatch', libDirAbs, `lib 实际 name（${name}）≠ 通讯录 key（${opts.expectedName}）。\n下一步：更新 lpm.config.json 中 libs 键为 ${name} 后重试`)
   }
   const entryCandidates = resolveEntryCandidates(libDirAbs, manifest)
   // 必须是常规文件：无扩展名候选（如 "main": "./dist"）会同时产出目录与 index.js 两个路径，
   // 目录存在但构建产物缺失时不得放行（B5 误放行修复）
   if (entryCandidates !== null && !entryCandidates.some((p) => existsSync(p) && statSync(p).isFile())) {
-    throw new LibCheckError('entry-missing', libDirAbs, `入口产物缺失：${entryCandidates[0]}。先 build 或起 build:watch 后重试。`)
+    throw new LibCheckError('entry-missing', libDirAbs, `入口产物缺失：${entryCandidates[0]}。\n下一步：先 build 或起 build:watch 后重试`)
   }
   const nmDir = join(libDirAbs, 'node_modules')
   let nmEmpty = true
   if (existsSync(nmDir) && statSync(nmDir).isDirectory()) nmEmpty = readdirSync(nmDir).length === 0
   if (nmEmpty) {
-    throw new LibCheckError('node-modules-empty', libDirAbs, `${libDirAbs} 的 node_modules 为空。先在 ${libDirAbs} 执行包管理器 install。`)
+    throw new LibCheckError('node-modules-empty', libDirAbs, `${libDirAbs} 的 node_modules 为空。\n下一步：先在 ${libDirAbs} 执行包管理器 install`)
   }
   if (opts.expectWatchScript === true) {
     const scripts = manifest['scripts']
     const has = scripts !== null && typeof scripts === 'object' && !Array.isArray(scripts)
       && typeof (scripts as Record<string, unknown>)['build:watch'] === 'string'
     if (!has) {
-      throw new LibCheckError('watch-script-missing', libDirAbs, `${libDirAbs} 缺 build:watch script。请在 lib package.json 的 scripts 补充后重试，或去掉 --watch。`)
+      throw new LibCheckError('watch-script-missing', libDirAbs, `${libDirAbs} 缺 build:watch script。\n下一步：在 lib package.json 的 scripts 补充后重试，或去掉 --watch`)
     }
   }
   return { name, manifestPath }

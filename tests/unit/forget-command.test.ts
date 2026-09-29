@@ -326,3 +326,38 @@ describe('lpm forget 交互（S11）', () => {
     expect(cap.out.join('')).toContain('已移除注册：@t/a')
   })
 })
+
+describe('lpm forget --dry-run（S12 spec §4.4/§4.5）', () => {
+  it('S12-FG-DR1：直通 --dry-run → 计划文本 + config byte 级零写盘 + exit 0', async () => {
+    const ws = makeWs()
+    registerLib(ws, '@t/a', 'libs/a')
+    registerLib(ws, '@t/b', 'libs/b')
+    const before = readFileSync(join(ws, 'lpm.config.json'), 'utf8')
+    const cap = captureOut()
+    const code = await runForget(['@t/a', '@t/b'], ws, { dryRun: true })
+    expect(code).toBe(0)
+    expect(cap.out.join('')).toContain('dry-run 执行计划（不落任何盘、不执行任何子进程）：')
+    expect(cap.out.join('')).toContain('将移除注册：@t/a、@t/b')
+    expect(readFileSync(join(ws, 'lpm.config.json'), 'utf8')).toBe(before)
+  })
+
+  it('S12-FG-DR2：--dry-run + 已链接 → 照样拦截 + 零写盘 + exit 1', async () => {
+    const ws = makeWs({ '.lpm/state.json': JSON.stringify({ version: 1, links: { '@t/a': { original: {}, linkedAt: 'x' } } }) })
+    registerLib(ws, '@t/a', 'libs/a')
+    const before = readFileSync(join(ws, 'lpm.config.json'), 'utf8')
+    const cap = captureOut()
+    const code = await runForget(['@t/a'], ws, { dryRun: true })
+    expect(code).toBe(1)
+    expect(cap.err.join('')).toContain('先 lpm unlink @t/a')
+    expect(readFileSync(join(ws, 'lpm.config.json'), 'utf8')).toBe(before)
+  })
+
+  it('S12-FG-DR3：无参数 + --dry-run → 拒绝 + exit 1 + 零 clack 调用', async () => {
+    const ws = makeWs()
+    const cap = captureOut()
+    const code = await runForget([], ws, { dryRun: true })
+    expect(code).toBe(1)
+    expect(cap.err.join('')).toContain('--dry-run 仅直通模式适用')
+    expect(multiselect).not.toHaveBeenCalled()
+  })
+})

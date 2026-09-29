@@ -125,11 +125,11 @@ export async function resolveTarget(raw: string, cfg: ProjectLpmConfig | null, r
   }
   const looksLikePath = raw.includes('/') || raw.includes('\\') || raw.startsWith('.') || isAbsolute(raw)
   if (!looksLikePath) {
-    throw new LinkArgumentError(raw, `未知注册名/路径不存在：${raw}。已注册：${registeredList(cfg)}；若为路径请使用路径写法（绝对/相对，含空格加引号）；若为注册名请检查拼写或先注册。`)
+    throw new LinkArgumentError(raw, `未知注册名/路径不存在：${raw}。\n下一步：已注册：${registeredList(cfg)}；若为路径请使用路径写法（绝对/相对，含空格加引号）；若为注册名请检查拼写或先注册。`)
   }
   const abs = resolve(cwd, raw)
   if (!isDirectory(abs)) {
-    throw new LinkArgumentError(raw, `未知注册名/路径不存在：${raw}。已注册：${registeredList(cfg)}；若为路径请确认目录存在；若为注册名请检查拼写或先注册。`)
+    throw new LinkArgumentError(raw, `未知注册名/路径不存在：${raw}。\n下一步：已注册：${registeredList(cfg)}；若为路径请确认目录存在；若为注册名请检查拼写或先注册。`)
   }
   return { key: '', libDirAbs: abs, source: 'path' }
 }
@@ -153,7 +153,7 @@ export async function resolveMonorepo(libDirAbs: string): Promise<{ libDirAbs: s
 async function pickMember(libDirAbs: string, members: PackageJsonInfo[]): Promise<{ libDirAbs: string; name: string }> {
   if (!process.stdin.isTTY) {
     const names = members.map((m) => (m.isRoot ? '（根）' : '') + (m.name !== '' ? m.name : toRel(libDirAbs, m.dir)))
-    throw new LinkInteractionError('member-select', `${libDirAbs} 是 monorepo 根，需要选择成员包：可选成员 ${names.join(', ')}。当前环境无法交互——请直接使用成员路径，如 lpm link <成员路径>。`)
+    throw new LinkInteractionError('member-select', `${libDirAbs} 是 monorepo 根，需要选择成员包：可选成员 ${names.join(', ')}。\n下一步：当前环境无法交互——请直接使用成员路径，如 lpm link <成员路径>`)
   }
   const selected = await clack.select({
     message: '该路径是 monorepo 根，请选择要链接的成员包',
@@ -411,31 +411,31 @@ async function resolveLinkCollection(
     names = Object.keys(libs)
     source = 'all'
     if (names.length === 0) {
-      throw new LinkArgumentError('', '当前没有任何已注册的 lib。先 lpm link <路径> 注册')
+      throw new LinkArgumentError('', '当前没有任何已注册的 lib。\n下一步：先 lpm link <路径> 注册')
     }
   } else if (opts.last === true) {
     const last = await readLast(rootDir)
     names = last?.names ?? []
     source = 'last'
     if (names.length === 0) {
-      throw new LinkArgumentError('', '没有上次链接的记录。先做一次批量 link（一次给 ≥ 2 个目标、或 --all / --preset）建立记录')
+      throw new LinkArgumentError('', '没有上次链接的记录。\n下一步：先做一次批量 link（一次给 ≥ 2 个目标、或 --all / --preset）建立记录')
     }
   } else {
     presetName = (opts.preset as string).trim()
     const view = readPresets(cfg)
     if (view.corrupt.includes(presetName)) {
-      throw new LinkArgumentError('', `预设 ${presetName} 内容损坏（应为字符串数组）。可 lpm preset rm ${presetName} 删除后重存`)
+      throw new LinkArgumentError('', `预设 ${presetName} 内容损坏（应为字符串数组）。\n下一步：可 lpm preset rm ${presetName} 删除后重存`)
     }
     if (!Object.hasOwn(view.raw, presetName)) {
       const avail = Object.keys(view.raw)
       throw new LinkArgumentError('', avail.length === 0
-        ? `预设不存在：${presetName}。当前没有任何预设。先 lpm save <名字>`
-        : `预设不存在：${presetName}。可用预设：${avail.join('、')}`)
+        ? `预设不存在：${presetName}。\n下一步：当前没有任何预设。先 lpm save <名字>`
+        : `预设不存在：${presetName}。\n下一步：可用预设：${avail.join('、')}`)
     }
     names = view.entries[presetName] ?? []
     source = 'preset'
     if (names.length === 0) {
-      throw new LinkArgumentError('', `预设 ${presetName} 是空的。先 lpm save ${presetName} 写入内容`)
+      throw new LinkArgumentError('', `预设 ${presetName} 是空的。\n下一步：先 lpm save ${presetName} 写入内容`)
     }
   }
   const missing: string[] = []
@@ -452,9 +452,9 @@ async function resolveLinkCollection(
     const whereBySource = { preset: `预设 ${presetName}`, last: '上次链接的记录', all: '--all 的注册表' } as const
     const where = whereBySource[source]
     const hints = source === 'preset'
-      ? `\n  用路径重新注册：lpm link <lib 路径>\n  或修掉这个预设：lpm preset rm ${presetName} 后重新 lpm save ${presetName}`
-      : '\n  用路径重新注册：lpm link <lib 路径>'
-    throw new LinkArgumentError('', `${where}里有${parts.join('；')}。${hints}`)
+      ? `用路径重新注册：lpm link <lib 路径>，或修掉这个预设：lpm preset rm ${presetName} 后重新 lpm save ${presetName}`
+      : '用路径重新注册：lpm link <lib 路径>'
+    throw new LinkArgumentError('', `${where}里有${parts.join('；')}。\n下一步：${hints}`)
   }
   return { names: names.map((n) => String(n)), source }
 }
@@ -556,7 +556,7 @@ async function buildLinkPlan(args: {
         planAbandoned.push(check.name)
         continue
       }
-      throw new LinkTargetError(check.name, `${check.name} 不在任何成员依赖中。先在引用方执行 pnpm add ${check.name} 再 link`)
+      throw new LinkTargetError(check.name, `${check.name} 不在任何成员依赖中。\n下一步：先在引用方执行 pnpm add ${check.name} 再 link`)
     }
 
     // E4 非 lpm 检测
@@ -573,7 +573,7 @@ async function buildLinkPlan(args: {
         process.stdout.write(`警告：检测到非 lpm 管理的本地链接（${toRel(rootDir, localHits[0].manifestPath)}）（dry-run 不记录 original）\n`)
         originals = firstWinOriginals()
       } else if (!process.stdin.isTTY) {
-        throw new LinkInteractionError('non-lpm-ternary', `检测到非 lpm 管理的本地链接（${toRel(rootDir, localHits[0].manifestPath)}），需交互确认原始 range。请手动恢复该文件原值后重试，或先 lpm link --dry-run 查看。`)
+        throw new LinkInteractionError('non-lpm-ternary', `检测到非 lpm 管理的本地链接（${toRel(rootDir, localHits[0].manifestPath)}），需交互确认原始 range。\n下一步：手动恢复该文件原值后重试，或先 lpm link --dry-run 查看`)
       } else {
         const picked = await ternaryOriginal(rootDir, key, check.name, hits)
         if (picked === ABANDON) {
@@ -1019,14 +1019,14 @@ export async function runLink(targets: readonly string[], opts: LinkOptions, cwd
   // S10 参数校验（spec §4.5）：顺序 = 三者互斥 → 与位置参数互斥 → 名为空；全部早于任何读盘
   const switchCount = [opts.last === true, opts.all === true, opts.preset !== undefined].filter(Boolean).length
   if (switchCount > 1) {
-    return reportError(new LinkArgumentError('', '--last / --all / --preset 三者互斥，请只用一个。用法：lpm link --last | --all | --preset <名>'))
+    return reportError(new LinkArgumentError('', '--last / --all / --preset 三者互斥。\n下一步：请只用一个。用法：lpm link --last | --all | --preset <名>'))
   }
   const hasSwitch = switchCount === 1
   if (targets.length > 0 && hasSwitch) {
-    return reportError(new LinkArgumentError('', '--last / --all / --preset 不能与 <名字|路径> 同时使用；要链接指定目标请直接给名字或路径'))
+    return reportError(new LinkArgumentError('', '--last / --all / --preset 不能与 <名字|路径> 同时使用。\n下一步：要链接指定目标请直接给名字或路径'))
   }
   if (typeof opts.preset === 'string' && opts.preset.trim() === '') {
-    return reportError(new LinkArgumentError('', '--preset 需要一个预设名（用法：lpm link --preset <名>）'))
+    return reportError(new LinkArgumentError('', '--preset 需要一个预设名。\n下一步：用法：lpm link --preset <名>'))
   }
   // A1 无参数（且无集合开关）→ S9 交互入口（非 TTY 由入口内部拒绝，绝不进菜单）
   if (targets.length === 0 && !hasSwitch) return await runLinkInteractive(opts, cwd)

@@ -55,13 +55,13 @@ function readLpmJson(
   } catch (err) {
     throw errOf(
       filePath,
-      `${filePath} 不是合法 JSON（${(err as Error).message}）。可修复或直接删除该文件——lpm 状态可抛弃重建`,
+      `${filePath} 不是合法 JSON（${(err as Error).message}）。\n下一步：可修复或直接删除该文件——lpm 状态可抛弃重建`,
     )
   }
   if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
     throw errOf(
       filePath,
-      `${filePath} 不是合法的 lpm 状态/配置文件（应为 JSON 对象）。可修复或直接删除该文件——lpm 状态可抛弃重建`,
+      `${filePath} 不是合法的 lpm 状态/配置文件（应为 JSON 对象）。\n下一步：可修复或直接删除该文件——lpm 状态可抛弃重建`,
     )
   }
   const obj = parsed as Record<string, unknown>
@@ -74,14 +74,14 @@ function readLpmJson(
     if (!ok) {
       throw errOf(
         filePath,
-        `${filePath} 的 ${field} 应为${kind === 'object' ? '对象' : '数组'}。可修复或直接删除该文件——lpm 状态可抛弃重建`,
+        `${filePath} 的 ${field} 应为${kind === 'object' ? '对象' : '数组'}。\n下一步：可修复或直接删除该文件——lpm 状态可抛弃重建`,
       )
     }
   }
   if (obj.version !== undefined && obj.version !== 1) {
     throw errOf(
       filePath,
-      `${filePath} 版本 ${String(obj.version)} 不受支持（当前仅 version: 1）。可修复或直接删除该文件——lpm 状态可抛弃重建`,
+      `${filePath} 版本 ${String(obj.version)} 不受支持（当前仅 version: 1）。\n下一步：可修复或直接删除该文件——lpm 状态可抛弃重建`,
     )
   }
   return obj

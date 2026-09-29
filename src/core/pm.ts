@@ -96,7 +96,7 @@ export async function detectPackageManagerDetailed(rootDir: string): Promise<Det
   if (found.length >= 2) {
     throw new PMAmbiguousError(
       [...found],
-      `检测到多个 lockfile（${found.join(', ')}），包管理器判定歧义。请手动指定：lpm use <pnpm|npm|yarn>`,
+      `检测到多个 lockfile（${found.join(', ')}），包管理器判定歧义。\n下一步：手动指定：lpm use <pnpm|npm|yarn>`,
     )
   }
   if (found.length === 1) {
@@ -119,7 +119,7 @@ export async function detectPackageManagerDetailed(rootDir: string): Promise<Det
   }
 
   throw new PMUnresolvedError(
-    '无法推断包管理器（未发现 lockfile、packageManager 字段或 pnpm-workspace.yaml）。请手动指定：lpm use <pnpm|npm|yarn>',
+    '无法推断包管理器（未发现 lockfile、packageManager 字段或 pnpm-workspace.yaml）。\n下一步：手动指定：lpm use <pnpm|npm|yarn>',
   )
 }
 

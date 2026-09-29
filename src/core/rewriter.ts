@@ -37,7 +37,7 @@ export function mapProtocol(pm: PackageManagerId, libDirAbs: string, manifestDir
     throw new ProtocolPathError(
       libDirAbs,
       manifestDirAbs,
-      `无法生成相对路径（跨盘符？）：libDir=${libDirAbs} manifestDir=${manifestDirAbs}`,
+      `无法生成相对路径（跨盘符？）：libDir=${libDirAbs} manifestDir=${manifestDirAbs}\n下一步：Windows 无法跨盘符写相对路径——将 lib 与项目放到同一盘符后重试`,
     )
   }
   // 步骤 3（OCR 修复轮段感知精化）：不以 './' 或 '../' 段开头（/^\.\.?($|\/)/）补 './' 前缀

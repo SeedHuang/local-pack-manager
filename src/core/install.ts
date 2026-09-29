@@ -53,7 +53,7 @@ function installError(command: string, exitCode: number | null, stderrTail: stri
     command,
     exitCode,
     stderrTail,
-    `install 失败（exit ${exitCode ?? '未知'}）：${stderrTail !== '' ? stderrTail : command}\n${advice}`,
+    `install 失败（exit ${exitCode ?? '未知'}）：${stderrTail !== '' ? stderrTail : command}\n下一步：${advice}`,
   )
 }
 

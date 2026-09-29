@@ -11,7 +11,7 @@ function invalid(pattern: string, reason: string): WorkspacePatternError {
   return new WorkspacePatternError(
     pattern,
     '',
-    `不支持的 workspace pattern "${pattern}"（${reason}）。支持：字面量段、*（单段）、**（独立段）、!排除；不支持 ?、[...]、{a,b}、\\ 转义、段内混合。请修改清单中的该 pattern。`,
+    `不支持的 workspace pattern "${pattern}"（${reason}）。\n下一步：支持：字面量段、*（单段）、**（独立段）、!排除；不支持 ?、[...]、{a,b}、\\ 转义、段内混合。请修改清单中的该 pattern`,
   )
 }
 

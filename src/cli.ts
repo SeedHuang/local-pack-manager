@@ -1,4 +1,4 @@
-import { Command, Argument } from 'commander'
+import { Command, Argument, CommanderError } from 'commander'
 import { realpathSync } from 'node:fs'
 import { pathToFileURL } from 'node:url'
 import { COMMANDS } from './commands/registry.js'
@@ -13,9 +13,42 @@ import { runForget } from './commands/forget.js'
 import { runUse } from './commands/use.js'
 import { LPM_VERSION } from './version.js'
 
+/** 未知命令模糊纠错（S12 spec §4.6）：Damerau-Levenshtein ≤3（与 commander 同质，含 transposition）。
+ *  返回全部同距离候选（按名排序）；candidates 缺省 = 全部注册命令名。纯函数，供单测。 */
+export function suggestCommand(raw: string, candidates: readonly string[] = COMMANDS.map((c) => c.name)): string[] {
+  const MAX = 3
+  const dist = (a: string, b: string): number => {
+    const d: number[][] = Array.from({ length: a.length + 1 }, () => Array<number>(b.length + 1).fill(0))
+    for (let i = 0; i <= a.length; i++) d[i]![0] = i
+    for (let j = 0; j <= b.length; j++) d[0]![j] = j
+    for (let i = 1; i <= a.length; i++) {
+      for (let j = 1; j <= b.length; j++) {
+        const cost = a[i - 1] === b[j - 1] ? 0 : 1
+        d[i]![j] = Math.min(d[i - 1]![j]! + 1, d[i]![j - 1]! + 1, d[i - 1]![j - 1]! + cost)
+        if (i > 1 && j > 1 && a[i - 1] === b[j - 2] && a[i - 2] === b[j - 1]) {
+          d[i]![j] = Math.min(d[i]![j]!, d[i - 2]![j - 2]! + 1)
+        }
+      }
+    }
+    return d[a.length]![b.length]!
+  }
+  let best = MAX
+  const hits: string[] = []
+  for (const c of candidates) {
+    if (c.length <= 1) continue
+    const dd = dist(raw, c)
+    if (dd < best) { best = dd; hits.length = 0; hits.push(c) }
+    else if (dd === best) hits.push(c)
+  }
+  return hits.sort()
+}
+
 export function buildProgram(): Command {
   const program = new Command()
   program.name('lpm').description('npm 本地 link 联调 CLI').version(LPM_VERSION)
+  // S12 §4.6：commander 改抛异常（不直接 process.exit）；关闭其英文 (Did you mean…?) 建议，改用自写中文建议
+  program.exitOverride()
+  program.showSuggestionAfterError(false)
 
   for (const meta of COMMANDS) {
     // S3：use 为首个真实命令，特判接线（description 不带计划后缀）；其余命令维持 stub 循环（S1 §4.5）
@@ -88,9 +121,10 @@ export function buildProgram(): Command {
         .command(meta.name)
         .description(meta.summary)
         .argument('<预设名>', '预设名')
+        .option('--dry-run', '仅打印执行计划，不落盘不执行')
         .allowExcessArguments(false)
-        .action(async (name: string) => {
-          process.exitCode = await runSave(name)
+        .action(async (name: string, options: { dryRun?: boolean }) => {
+          process.exitCode = await runSave(name, undefined, { dryRun: options.dryRun })
         })
       continue
     }
@@ -100,8 +134,9 @@ export function buildProgram(): Command {
         .command(meta.name)
         .description(meta.summary)
         .argument('[args...]', 'rm <名>')
-        .action(async (args: string[]) => {
-          process.exitCode = await runPreset(args)
+        .option('--dry-run', '仅打印执行计划，不落盘不执行')
+        .action(async (args: string[], options: { dryRun?: boolean }) => {
+          process.exitCode = await runPreset(args, undefined, { dryRun: options.dryRun })
         })
       continue
     }
@@ -111,8 +146,9 @@ export function buildProgram(): Command {
         .command(meta.name)
         .description(meta.summary)
         .argument('[args...]', 'add <路径> | rm <路径> | ls')
-        .action(async (args: string[]) => {
-          process.exitCode = await runDir(args)
+        .option('--dry-run', '仅打印执行计划，不落盘不执行')
+        .action(async (args: string[], options: { dryRun?: boolean }) => {
+          process.exitCode = await runDir(args, undefined, { dryRun: options.dryRun })
         })
       continue
     }
@@ -122,8 +158,9 @@ export function buildProgram(): Command {
         .command(meta.name)
         .description(meta.summary)
         .argument('[targets...]', '注册名或路径')
-        .action(async (targets: string[]) => {
-          process.exitCode = await runForget(targets)
+        .option('--dry-run', '仅打印执行计划，不落盘不执行')
+        .action(async (targets: string[], options: { dryRun?: boolean }) => {
+          process.exitCode = await runForget(targets, undefined, { dryRun: options.dryRun })
         })
       continue
     }
@@ -145,9 +182,26 @@ export async function run(argv: string[]): Promise<number> {
     return 0
   }
 
-  await program.parseAsync(argv, { from: 'user' })
-  // @types/node ≥22 中 exitCode 为 number | string | undefined，收敛为 number（契约 0/1）
-  return Number(process.exitCode ?? 0)
+  try {
+    await program.parseAsync(argv, { from: 'user' })
+    // @types/node ≥22 中 exitCode 为 number | string | undefined，收敛为 number（契约 0/1）
+    return Number(process.exitCode ?? 0)
+  } catch (err) {
+    if (err instanceof CommanderError) {
+      // exitOverride 下 --help/--version 抛 exitCode=0（内容 commander 已打印到 stdout）→ 正常结束
+      if (err.exitCode === 0) return 0
+      // 报错内容（error: unknown command 'lnik' 等）commander 已写入 stderr（command.js error() 先 outputError 再 _exit）
+      if (err.code === 'commander.unknownCommand') {
+        const raw = /'([^']+)'/.exec(err.message)?.[1]
+        if (raw !== undefined) {
+          const sim = suggestCommand(raw)
+          if (sim.length > 0) process.stderr.write(`最接近的命令：${sim.join('、')}\n`)
+        }
+      }
+      return 1
+    }
+    throw err
+  }
 }
 
 // 直接执行时才 run()，被 import（测试）时不执行；

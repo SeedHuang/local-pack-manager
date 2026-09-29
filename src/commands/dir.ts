@@ -2,6 +2,7 @@ import { existsSync, statSync } from 'node:fs'
 import { isAbsolute } from 'node:path'
 import * as clack from '@clack/prompts'
 import { LpmStateParseError, readUserConfig, writeUserConfig } from '../state/index.js'
+import { renderPlan, type PlanView } from './plan-view.js'
 
 /** dir 相关错误（命令域；沿用「错误类归命令文件」先例） */
 export class DirError extends Error {
@@ -24,7 +25,7 @@ function reportError(err: unknown): number {
 const DIR_USAGE = 'lpm dir add <路径> | rm <路径> | ls'
 
 /** `lpm dir add <路径>`：校验（绝对 + 存在目录，同 S9 addScanDir）→ 去重 → 读-改-写 */
-async function runDirAdd(dir: string): Promise<number> {
+async function runDirAdd(dir: string, opts: { dryRun?: boolean }): Promise<number> {
   const trimmed = dir.trim()
   let ok = false
   try {
@@ -33,7 +34,12 @@ async function runDirAdd(dir: string): Promise<number> {
     ok = false
   }
   if (!ok) {
-    throw new DirError(`扫描目录必须是已存在的绝对路径：${trimmed}。示例：D:\\Seed\\libs`)
+    throw new DirError(`扫描目录必须是已存在的绝对路径：${trimmed}。\n下一步：示例：D:\\Seed\\libs`)
+  }
+  if (opts.dryRun === true) {
+    const view: PlanView = { entries: [{ kind: 'line', text: `将加入扫描目录：${trimmed}` }], install: null, watch: [] }
+    process.stdout.write(renderPlan(view, 'dry-run'))
+    return 0
   }
   const cur = await readUserConfig()
   if (!cur.scanDirs.includes(trimmed)) {
@@ -44,14 +50,19 @@ async function runDirAdd(dir: string): Promise<number> {
 }
 
 /** `lpm dir rm <路径>`：按值移除（空态与不在列表分别报错）；先 trim（与 runDirAdd 对称：add 存的都是 trim 后值） */
-async function runDirRm(raw: string): Promise<number> {
+async function runDirRm(raw: string, opts: { dryRun?: boolean }): Promise<number> {
   const dir = raw.trim()
   const cur = await readUserConfig()
   if (cur.scanDirs.length === 0) {
-    throw new DirError('当前没有任何扫描目录。可用 lpm dir add <路径> 添加')
+    throw new DirError('当前没有任何扫描目录。\n下一步：用 lpm dir add <路径> 添加')
   }
   if (!cur.scanDirs.includes(dir)) {
-    throw new DirError(`扫描目录不在列表中：${dir}。可用 lpm dir ls 查看`)
+    throw new DirError(`扫描目录不在列表中：${dir}。\n下一步：用 lpm dir ls 查看当前列表`)
+  }
+  if (opts.dryRun === true) {
+    const view: PlanView = { entries: [{ kind: 'line', text: `将移除扫描目录：${dir}` }], install: null, watch: [] }
+    process.stdout.write(renderPlan(view, 'dry-run'))
+    return 0
   }
   await writeUserConfig({ ...cur, scanDirs: cur.scanDirs.filter((d) => d !== dir) })
   process.stdout.write(`已移除扫描目录：${dir}\n`)
@@ -104,13 +115,19 @@ async function runDirInteractive(): Promise<number> {
 }
 
 /** `lpm dir` 入口（分派在内部，便于单测）；`_cwd` 仅供 cli 位置一致，dir 纯用户级不定位 workspace */
-export async function runDir(args: readonly string[], _cwd: string = process.cwd()): Promise<number> {
+export async function runDir(args: readonly string[], _cwd: string = process.cwd(), opts: { dryRun?: boolean } = {}): Promise<number> {
   try {
-    if (args.length === 0) return await runDirInteractive()
-    if (args[0] === 'add' && args.length === 2) return await runDirAdd(args[1] as string)
-    if (args[0] === 'rm' && args.length === 2) return await runDirRm(args[1] as string)
+    if (args.length === 0) {
+      if (opts.dryRun === true) {
+        process.stderr.write(`--dry-run 仅直通模式适用（交互模式自带确认与预览）；直通用法：${DIR_USAGE} --dry-run\n`)
+        return 1
+      }
+      return await runDirInteractive()
+    }
+    if (args[0] === 'add' && args.length === 2) return await runDirAdd(args[1] as string, opts)
+    if (args[0] === 'rm' && args.length === 2) return await runDirRm(args[1] as string, opts)
     if (args[0] === 'ls' && args.length === 1) return await runDirLs()
-    throw new DirError(`用法：${DIR_USAGE}`)
+    throw new DirError(`用法错误。\n下一步：${DIR_USAGE}`)
   } catch (err) {
     return reportError(err)
   }

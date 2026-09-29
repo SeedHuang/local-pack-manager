@@ -13,6 +13,7 @@ import type { ProjectLpmConfig } from '../../src/state/types.js'
 
 const dirs: string[] = []
 afterEach(() => { while (dirs.length > 0) rmSync(dirs.pop() as string, { recursive: true, force: true }) })
+beforeEach(() => { vi.clearAllMocks() })
 
 describe('readPresets 守卫（spec §4.7）', () => {
   it('PRE-1：cfg=null / 无 presets → 空视图', () => {
@@ -192,7 +193,7 @@ describe('lpm preset rm（直通，spec §4.9）', () => {
     for (const args of [['foo'], ['rm'], ['rm', 'a', 'b'], ['rm', 'a', 'b', 'c']]) {
       expect(await runPreset(args, dir)).toBe(1)
     }
-    expect(cap.stderr()).toContain('用法：lpm preset')
+    expect(cap.stderr()).toContain('下一步：lpm preset')
   })
 })
 
@@ -280,5 +281,50 @@ describe('lpm preset（无参数交互菜单，spec §4.9）', () => {
     const opts = (vi.mocked(multiselect).mock.calls[0]![0] as { options: Array<{ value: string; label: string }> }).options
     expect(opts.find((o) => o.value === 'broken')?.label).toContain('[损坏]')
     expect(cfgOf(dir).presets).toEqual({ ok: ['@t/a'] })
+  })
+})
+
+// ── S12 T4：save / preset rm --dry-run（spec §4.4/§4.5）──
+describe('save / preset rm --dry-run（S12 spec §4.4/§4.5）', () => {
+  it('S12-PR-DR1：save --dry-run → 计划文本 + config byte 级零写盘 + exit 0', async () => {
+    const dir = makeProj({ 'lpm.config.json': JSON.stringify({ version: 1, libs: {} }) })
+    writeStateFile(dir, ['@t/b', '@t/a'])
+    const before = readFileSync(join(dir, 'lpm.config.json'), 'utf8')
+    const cap = captureOut()
+    const code = await runSave('前端', dir, { dryRun: true })
+    expect(code).toBe(0)
+    expect(cap.stdout()).toContain('dry-run 执行计划（不落任何盘、不执行任何子进程）：')
+    expect(cap.stdout()).toContain('将保存预设：前端（2 项：@t/a、@t/b）')
+    expect(readFileSync(join(dir, 'lpm.config.json'), 'utf8')).toBe(before)
+  })
+
+  it('S12-PR-DR2：save --dry-run 撞名 → 照样报错 + 零写盘', async () => {
+    const dir = makeProj({ 'lpm.config.json': JSON.stringify({ version: 1, libs: {}, presets: { 前端: ['@t/a'] } }) })
+    writeStateFile(dir, ['@t/b'])
+    const before = readFileSync(join(dir, 'lpm.config.json'), 'utf8')
+    const cap = captureOut()
+    const code = await runSave('前端', dir, { dryRun: true })
+    expect(code).toBe(1)
+    expect(cap.stderr()).toContain('预设名已存在')
+    expect(readFileSync(join(dir, 'lpm.config.json'), 'utf8')).toBe(before)
+  })
+
+  it('S12-PR-DR3：preset rm --dry-run → 计划文本 + 零写盘 + exit 0', async () => {
+    const dir = makeProj({ 'lpm.config.json': JSON.stringify({ version: 1, libs: {}, presets: { a: ['@t/lib'], b: ['@t/x'] } }) })
+    const before = readFileSync(join(dir, 'lpm.config.json'), 'utf8')
+    const cap = captureOut()
+    const code = await runPreset(['rm', 'a'], dir, { dryRun: true })
+    expect(code).toBe(0)
+    expect(cap.stdout()).toContain('将删除预设：a')
+    expect(readFileSync(join(dir, 'lpm.config.json'), 'utf8')).toBe(before)
+  })
+
+  it('S12-PR-DR4：preset 无参数 + --dry-run → 拒绝 + exit 1 + 零 clack 调用', async () => {
+    const dir = makeProj({ 'lpm.config.json': JSON.stringify({ version: 1, libs: {}, presets: { a: ['@t/lib'] } }) })
+    const cap = captureOut()
+    const code = await runPreset([], dir, { dryRun: true })
+    expect(code).toBe(1)
+    expect(cap.stderr()).toContain('--dry-run 仅直通模式适用')
+    expect(multiselect).not.toHaveBeenCalled()
   })
 })

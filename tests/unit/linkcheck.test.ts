@@ -72,7 +72,7 @@ describe('checkLib（S6 spec §4.4 C 七 kind 正反）', () => {
     } catch (e) {
       const err = e as LibCheckError
       expect(err.kind).toBe('name-mismatch')
-      expect(err.message).toContain('请更新 lpm.config.json')
+      expect(err.message).toContain('更新 lpm.config.json 中 libs 键')
     }
   })
 
