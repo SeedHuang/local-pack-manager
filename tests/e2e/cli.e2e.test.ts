@@ -11,7 +11,7 @@ const pkg = JSON.parse(
 
 const COMMAND_NAMES = [
   'use', 'link', 'unlink', 'status', 'repair',
-  'save', 'preset', 'forget', 'dir', 'init', 'uninit',
+  'save', 'preset', 'forget', 'dir', 'init', 'uninit', 'umd',
 ]
 
 // 工作目录用临时目录（spec §7.3）；S1 stub 不读工作区，任意存在目录皆可
@@ -25,7 +25,7 @@ describe('lpm CLI e2e', () => {
     expect(pkg.version).toMatch(/^\d+\.\d+\.\d+/)
   })
 
-  it('--help：exit 0，列出全部 11 个命令', async () => {
+  it('--help：exit 0，列出全部 12 个命令', async () => {
     const r = await runCli(['--help'], cwd)
     expect(r.exitCode).toBe(0)
     for (const name of COMMAND_NAMES) {
@@ -629,5 +629,22 @@ describe('lpm init/uninit e2e（S13）', () => {
     const r = await runCli(['uninit', '--dry-run'], web)
     expect(r.exitCode).toBe(1)
     expect(r.stderr).toContain('未检测到 lpm 注入片段')
+  })
+})
+
+// S15 e2e（spec §6）：仅无网络路径；happy path 由 unit mock 覆盖
+describe('lpm umd e2e（S15）', () => {
+  const made: string[] = []
+  afterEach(() => {
+    while (made.length > 0) rmSync(made.pop() as string, { recursive: true, force: true })
+  })
+
+  it('无 lpm.config.json → exit 0 + stdout 提示先注册（不触发网络）', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'lpm-e2e-umd-'))
+    made.push(dir)
+    writeFileSync(join(dir, 'package.json'), JSON.stringify({ name: 'proj' }), 'utf8')
+    const r = await runCli(['umd'], dir)
+    expect(r.exitCode).toBe(0)
+    expect(r.stdout).toContain('先 lpm link')
   })
 })

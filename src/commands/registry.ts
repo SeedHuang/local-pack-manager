@@ -15,4 +15,5 @@ export const COMMANDS: CommandMeta[] = [
   { name: 'dir',     summary: '用户级扫描目录管理' },
   { name: 'init',    summary: '注入 web 自感知配置片段' },
   { name: 'uninit',  summary: '摘除 web 自感知配置片段' },
+  { name: 'umd',     summary: '把自研库的远程依赖更新到 npm 最新版' },
 ]

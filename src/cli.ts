@@ -11,6 +11,7 @@ import { runDir } from './commands/dir.js'
 import { runForget } from './commands/forget.js'
 import { runInit, runUninit } from './commands/init.js'
 import { runUse } from './commands/use.js'
+import { runUmd } from './commands/umd.js'
 import { LPM_VERSION } from './version.js'
 
 /** 未知命令模糊纠错（S12 spec §4.6）：Damerau-Levenshtein ≤3（与 commander 同质，含 transposition）。
@@ -185,6 +186,17 @@ export function buildProgram(): Command {
         .allowExcessArguments(false)
         .action(async (options: { dryRun?: boolean }) => {
           process.exitCode = await runUninit(undefined, { dryRun: options.dryRun })
+        })
+      continue
+    }
+    // S15：umd 逐库确认型接线（仿 repair：无位置参数；--dry-run / --yes）
+    if (meta.name === 'umd') {
+      program.command(meta.name).description(meta.summary)
+        .option('--dry-run', '仅打印执行计划，不落盘不执行')
+        .option('--yes', '跳过逐库确认，直接更新')
+        .allowExcessArguments(false)
+        .action(async (options: { dryRun?: boolean; yes?: boolean }) => {
+          process.exitCode = await runUmd({ dryRun: options.dryRun, yes: options.yes })
         })
       continue
     }

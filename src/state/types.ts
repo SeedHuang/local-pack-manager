@@ -26,7 +26,7 @@ export interface UserLpmConfig { version: 1; scanDirs: string[] }   // 绝对路
 /** 项目级 .lpm/last-run.json（gitignore）—— S8 运行留痕：只留最近一次 */
 export interface LastRunTrace {
   version: 1
-  command: 'link' | 'unlink' | 'repair'
+  command: 'link' | 'unlink' | 'repair' | 'umd'
   at: string                    // ISO 8601
   rootDir: string
   packageManager: PackageManagerId

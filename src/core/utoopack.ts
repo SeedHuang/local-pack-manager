@@ -30,7 +30,7 @@ export class InitHostPkgError extends Error {
   }
 }
 export class InitInteractionError extends Error {
-  constructor(cmd: 'init' | 'uninit') {
+  constructor(cmd: 'init' | 'uninit' | 'umd') {
     super(`需交互确认注入/摘除计划。\n下一步：改用 lpm ${cmd} --dry-run 查看预览`)
     this.name = 'InitInteractionError'
   }
