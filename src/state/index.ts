@@ -88,17 +88,19 @@ function readLpmJson(
   return obj
 }
 
+/** 读 lpm JSON 文件：缺失 → null；其余校验/错误分域交给 readLpmJson（四个 read* 共用同一「存在 → 校验 → 转型」骨架） */
+function readLpmFileOrNull<T>(
+  filePath: string,
+  fieldChecks: Array<{ field: string; kind: 'object' | 'array' }>,
+  errOf: (filePath: string, message: string) => Error,
+): T | null {
+  if (!existsSync(filePath)) return null
+  return readLpmJson(filePath, readFileSync(filePath, 'utf8'), fieldChecks, errOf) as unknown as T
+}
+
 /** S3 提前实现（S3 spec §4.6）+ S4 深层校验增强（F1/F2 闭环）：缺失 → null；坏 JSON/非对象/字段校验失败 → LpmConfigParseError */
 export async function readProjectConfig(rootDir: string): Promise<ProjectLpmConfig | null> {
-  const p = configPathOf(rootDir)
-  if (!existsSync(p)) return null
-  const parsed = readLpmJson(
-    p,
-    readFileSync(p, 'utf8'),
-    [{ field: 'libs', kind: 'object' }],
-    (fp, msg) => new LpmConfigParseError(fp, msg),
-  )
-  return parsed as unknown as ProjectLpmConfig
+  return readLpmFileOrNull<ProjectLpmConfig>(configPathOf(rootDir), [{ field: 'libs', kind: 'object' }], (fp, msg) => new LpmConfigParseError(fp, msg))
 }
 
 /** S3 提前实现（S3 spec §4.6）：原子写（PRD §9） */
@@ -109,15 +111,7 @@ export async function writeProjectConfig(rootDir: string, cfg: ProjectLpmConfig)
 // 全部写入为原子写：临时文件 + rename（PRD §9 崩溃安全）——S4 实现（spec §4.4）
 
 export async function readState(rootDir: string): Promise<LinkState | null> {
-  const p = statePathOf(rootDir)
-  if (!existsSync(p)) return null
-  const obj = readLpmJson(
-    p,
-    readFileSync(p, 'utf8'),
-    [{ field: 'links', kind: 'object' }],
-    (fp, msg) => new LpmStateParseError(fp, msg),
-  )
-  return obj as unknown as LinkState
+  return readLpmFileOrNull<LinkState>(statePathOf(rootDir), [{ field: 'links', kind: 'object' }], (fp, msg) => new LpmStateParseError(fp, msg))
 }
 
 function ensureParentDir(filePath: string): void {
@@ -138,15 +132,7 @@ export async function deleteState(rootDir: string): Promise<void> {
 }
 
 export async function readLast(rootDir: string): Promise<LastSet | null> {
-  const p = lastPathOf(rootDir)
-  if (!existsSync(p)) return null
-  const obj = readLpmJson(
-    p,
-    readFileSync(p, 'utf8'),
-    [{ field: 'names', kind: 'array' }],
-    (fp, msg) => new LpmStateParseError(fp, msg),
-  )
-  return obj as unknown as LastSet
+  return readLpmFileOrNull<LastSet>(lastPathOf(rootDir), [{ field: 'names', kind: 'array' }], (fp, msg) => new LpmStateParseError(fp, msg))
 }
 
 export async function writeLast(rootDir: string, last: LastSet): Promise<void> {
@@ -158,15 +144,7 @@ export async function writeLast(rootDir: string, last: LastSet): Promise<void> {
 
 export async function readUserConfig(): Promise<UserLpmConfig> {
   // 文件缺失 → { version: 1, scanDirs: [] }
-  const p = userConfigPath()
-  if (!existsSync(p)) return { version: 1, scanDirs: [] }
-  const obj = readLpmJson(
-    p,
-    readFileSync(p, 'utf8'),
-    [{ field: 'scanDirs', kind: 'array' }],
-    (fp, msg) => new LpmStateParseError(fp, msg),
-  )
-  return obj as unknown as UserLpmConfig
+  return readLpmFileOrNull<UserLpmConfig>(userConfigPath(), [{ field: 'scanDirs', kind: 'array' }], (fp, msg) => new LpmStateParseError(fp, msg)) ?? { version: 1, scanDirs: [] }
 }
 
 export async function writeUserConfig(cfg: UserLpmConfig): Promise<void> {

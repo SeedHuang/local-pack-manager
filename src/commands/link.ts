@@ -772,11 +772,11 @@ const LAST_LINKED = '\u0000__last__'
 const MANAGE_OPTION = '\u0000__manage__'
 const LINK_USAGE = 'lpm link <名字|路径>... [--watch] [--dry-run]'
 
-/** 手输路径：3 次重试（镜像 ternaryOriginal 的手动通道）；取消 → CANCELLED；耗尽 → [] */
-async function promptPaths(): Promise<string[] | typeof CANCELLED> {
+/** 手输路径（3 次重试；取消 → 调用方哨兵；耗尽 → []）：link/unlink 共用，message 与取消哨兵参数化 */
+export async function promptPathList<T extends symbol>(message: string, cancelled: T): Promise<string[] | T> {
   for (let i = 0; i < 3; i++) {
-    const inp = await clack.text({ message: '输入 lib 路径（多个用空格分隔，含空格加引号）' })
-    if (clack.isCancel(inp)) return CANCELLED
+    const inp = await clack.text({ message })
+    if (clack.isCancel(inp)) return cancelled
     try {
       return parsePathInput(String(inp))
     } catch (err) {
@@ -784,6 +784,25 @@ async function promptPaths(): Promise<string[] | typeof CANCELLED> {
     }
   }
   return []
+}
+
+/** link 失败路径收口（交互/直通共用）：dry-run 闸门 + rootDir/pm 可定位才留痕 → 取消 → 已知错误上报 */
+async function handleLinkError(
+  opts: LinkOptions,
+  traceRoot: string | null,
+  tracePm: PackageManagerId | null,
+  traceChanges: LastRunTrace['changes'],
+  traceInstalls: LastRunTrace['installs'],
+  err: unknown,
+): Promise<number> {
+  if (opts.dryRun !== true && traceRoot !== null && tracePm !== null) {
+    await traceFailure('link', traceRoot, tracePm, traceChanges, traceInstalls, err)
+  }
+  if (err instanceof LinkCancelledError) {
+    process.stderr.write('已取消\n')
+    return 1
+  }
+  return reportError(err)
 }
 
 /** 空态向导（spec §4.7）：输路径 / 加扫描目录 / 退出 */
@@ -884,7 +903,7 @@ async function pickLinkTargets(
   }
   // 「其他…」不是最终勾选项：提交后若被勾选，先弹输入并把解析出的 target 并入（spec §4.5）
   if (pickedArr.includes(OTHER_OPTION)) {
-    const raws = await promptPaths()
+    const raws = await promptPathList('输入 lib 路径（多个用空格分隔，含空格加引号）', CANCELLED)
     if (raws === CANCELLED) return CANCELLED
     values.push(...raws)
   }
@@ -956,9 +975,7 @@ async function runPlanAndExecute(
   return await executeLinkPlan(plan, ctx.opts)
 }
 
-/** link 交互入口：空态向导 → 主列表 → 计划预览 → 确认 → 执行（spec §4.5 / §4.7 / §4.10）。
- *  复杂度 32：交互阶段流（向导/分组列表/预览/确认），拆分属 E 类立项，暂标注豁免 */
-// eslint-disable-next-line sonarjs/cognitive-complexity
+/** link 交互入口：空态向导 → 主列表 → 计划预览 → 确认 → 执行（spec §4.5 / §4.7 / §4.10） */
 async function runLinkInteractive(opts: LinkOptions, cwd: string): Promise<number> {
   if (process.stdin.isTTY !== true) {
     process.stdout.write(`当前不是交互终端；直通用法：${LINK_USAGE}\n`)
@@ -998,20 +1015,13 @@ async function runLinkInteractive(opts: LinkOptions, cwd: string): Promise<numbe
       if (step === CANCELLED) { process.stdout.write('已取消\n'); return 1 }
       if (step === 'quit') return 0
       if (step === 'scan') { await addScanDir(); continue }   // 成功/失败都回主列表重扫
-      const raws = await promptPaths()
+      const raws = await promptPathList('输入 lib 路径（多个用空格分隔，含空格加引号）', CANCELLED)
       if (raws === CANCELLED) { process.stdout.write('已取消\n'); return 1 }
       if (raws.length === 0) continue
       return await runPlanAndExecute(raws, { opts, rootDir, cwd, ws, cfg, pm, st, traceChanges, traceInstalls }, false)
     }
   } catch (err) {
-    if (opts.dryRun !== true && traceRoot !== null && tracePm !== null) {
-      await traceFailure('link', traceRoot, tracePm, traceChanges, traceInstalls, err)
-    }
-    if (err instanceof LinkCancelledError) {
-      process.stderr.write('已取消\n')
-      return 1
-    }
-    return reportError(err)
+    return await handleLinkError(opts, traceRoot, tracePm, traceChanges, traceInstalls, err)
   }
 }
 
@@ -1062,13 +1072,6 @@ export async function runLink(targets: readonly string[], opts: LinkOptions, cwd
   } catch (err) {
     // S8 运行留痕（spec §4.6）：失败路径在 reportError 之前捕获原始证据
     // 闸门：--dry-run 零写盘契约优先（不跑子进程、无值得留的证据）——S8 评审 ① 裁定
-    if (opts.dryRun !== true && traceRoot !== null && tracePm !== null) {
-      await traceFailure('link', traceRoot, tracePm, traceChanges, traceInstalls, err)
-    }
-    if (err instanceof LinkCancelledError) {
-      process.stderr.write('已取消\n')
-      return 1
-    }
-    return reportError(err)
+    return await handleLinkError(opts, traceRoot, tracePm, traceChanges, traceInstalls, err)
   }
 }

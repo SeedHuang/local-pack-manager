@@ -11,7 +11,7 @@ import {
   runInstall,
 } from '../core/install.js'
 import { PMAmbiguousError, PMUnresolvedError, resolvePackageManager, type PackageManagerId } from '../core/pm.js'
-import { LOCAL_PROTOCOL_RE, readDepValues, restoreDepValue, type RewriteResult } from '../core/rewriter.js'
+import { LOCAL_PROTOCOL_RE, readDepValues, restoreDepValue } from '../core/rewriter.js'
 import {
   ManifestParseError,
   WorkspaceNotFoundError,
@@ -33,7 +33,7 @@ import {
   writeState,
 } from '../state/index.js'
 import type { LastRunTrace, LinkState, ProjectLpmConfig } from '../state/types.js'
-import { LinkArgumentError, LinkCancelledError, LinkInteractionError, parsePathInput, resolveMonorepo, resolveTarget } from './link.js'
+import { LinkArgumentError, LinkCancelledError, LinkInteractionError, promptPathList, resolveMonorepo, resolveTarget } from './link.js'
 import { renderPlan, type PlanEntry, type PlanView } from './plan-view.js'
 import { traceFailure } from './run-trace.js'
 import { reportError as reportKnownError } from './errors.js'
@@ -107,6 +107,23 @@ export function validateEntry(key: string, entry: LinkState['links'][string] | u
     }
   }
   return o as Record<string, string>
+}
+
+/** 恢复动作（态1 恢复 与 冲突选「original」共用）：改写内容 + 记命中 + 返回 changed 数（调用方累加 totalChanged / 置 anyRestored） */
+function applyRestore(
+  agg: FileAgg,
+  key: string,
+  origValue: string,
+  values: ReadonlyArray<{ section: string; value: string }>,
+  manifestPath: string,
+): number {
+  const result = restoreDepValue(agg.content, key, origValue)
+  agg.content = result.content
+  agg.changedCount += result.changedKeys.length
+  for (const h of values) {
+    agg.hits.push({ manifestPath, pkgName: key, original: origValue, fromValue: h.value, section: h.section })
+  }
+  return result.changedKeys.length
 }
 
 interface VerifyFinding { rel: string; nmRel: string; status: 'ok' | 'missing' | 'residue'; note?: string }
@@ -274,13 +291,7 @@ async function buildUnlinkPlan(args: {
       }
       if (LOCAL_PROTOCOL_RE.test(representative)) {
         // 态1 恢复（全段写回——裁决 4）
-        const result: RewriteResult = restoreDepValue(agg.content, key, origValue)
-        agg.content = result.content
-        agg.changedCount += result.changedKeys.length
-        totalChanged += result.changedKeys.length
-        for (const h of values) {
-          agg.hits.push({ manifestPath, pkgName: key, original: origValue, fromValue: h.value, section: h.section })
-        }
+        totalChanged += applyRestore(agg, key, origValue, values, manifestPath)
         anyRestored = true
         // 裁决 4（全段写回）：点明哪些段的手动改动将被覆盖——OCR 建议的文案显性化（行为不变）
         if (values.length >= 2 && new Set(values.map((v) => v.value)).size > 1) {
@@ -312,13 +323,7 @@ async function buildUnlinkPlan(args: {
           break
         }
         if (picked === 'original') {
-          const result = restoreDepValue(agg.content, key, origValue)
-          agg.content = result.content
-          agg.changedCount += result.changedKeys.length
-          totalChanged += result.changedKeys.length
-          for (const h of values) {
-            agg.hits.push({ manifestPath, pkgName: key, original: origValue, fromValue: h.value, section: h.section })
-          }
+          totalChanged += applyRestore(agg, key, origValue, values, manifestPath)
           anyRestored = true
         }
         // picked === 'current' → 该文件该 key 零改写；key 仍进待删集（G1）
@@ -538,20 +543,6 @@ const CANCELLED_U = Symbol('cancelled')
 const PATH_OPTION = '\u0000__path__'
 const UNLINK_USAGE = 'lpm unlink <名字|路径>... [--all] [--dry-run]'
 
-/** 按路径取消的输入通道：3 次重试；取消 → CANCELLED_U；耗尽 → [] */
-async function promptUnlinkPaths(): Promise<string[] | typeof CANCELLED_U> {
-  for (let i = 0; i < 3; i++) {
-    const inp = await clack.text({ message: '输入要取消的路径（多个用空格分隔，含空格加引号）' })
-    if (clack.isCancel(inp)) return CANCELLED_U
-    try {
-      return parsePathInput(String(inp))
-    } catch (err) {
-      process.stderr.write(`${(err as Error).message}。请用绝对路径或相对路径；多个路径用空格分隔，含空格请加引号\n`)
-    }
-  }
-  return []
-}
-
 /** 列表多选（spec §4.6）：包名 +（链接的子包）+ 将恢复的 range + [漂移]/[记录损坏]；附「按路径取消…」 */
 async function pickLinkedKeys(
   items: LinkedItem[],
@@ -570,7 +561,7 @@ async function pickLinkedKeys(
   if (clack.isCancel(picked)) return CANCELLED_U
   const values = (picked as string[]).filter((v) => v !== PATH_OPTION)
   if (!(picked as string[]).includes(PATH_OPTION)) return values
-  const raws = await promptUnlinkPaths()
+  const raws = await promptPathList('输入要取消的路径（多个用空格分隔，含空格加引号）', CANCELLED_U)
   if (raws === CANCELLED_U) return CANCELLED_U
   for (const raw of raws) {
     // 路径 → key（复用直通解析链；解析失败/不在注册表 → 一律按「未处于链接状态」处理，不中断）

@@ -23,7 +23,7 @@ import { renderPlan, type PlanView } from './plan-view.js'
 import { reportError as reportKnownError } from './errors.js'
 
 /** forget 相关错误（命令域；沿用「错误类归命令文件」先例） */
-export class ForgetError extends Error {
+class ForgetError extends Error {
   constructor(message: string) {
     super(message)
     this.name = 'ForgetError'

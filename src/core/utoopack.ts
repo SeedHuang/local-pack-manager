@@ -55,8 +55,8 @@ export class InitIncompleteMarkerError extends Error {
 }
 
 // ── 标记常量（单源；spec §3.1）──
-export const INJECT_START = '/* lpm-inject:start */'
-export const INJECT_END = '/* lpm-inject:end */'
+const INJECT_START = '/* lpm-inject:start */'
+const INJECT_END = '/* lpm-inject:end */'
 
 // ── 宿主定位（spec §4.2 候选文件名按序）──
 const HOST_CONFIG_CANDIDATES = ['config/config.ts', '.umirc.ts', 'config/config.js', '.umirc.js'] as const
@@ -286,7 +286,7 @@ export function removeFragment(source: string): string {
   return source.slice(0, removeStart) + source.slice(m.end)
 }
 
-export function readJsonSafe(filePath: string): Record<string, unknown> {
+function readJsonSafe(filePath: string): Record<string, unknown> {
   const parsed: unknown = JSON.parse(stripBom(readFileSync(filePath, 'utf8')))
   if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('not an object')
   return parsed as Record<string, unknown>
