@@ -24,7 +24,7 @@ const DIR_USAGE = 'lpm dir add <路径> | rm <路径> | ls'
 /** `lpm dir add <路径>`：校验（绝对 + 存在目录，同 S9 addScanDir）→ 去重 → 读-改-写 */
 async function runDirAdd(dir: string, opts: { dryRun?: boolean }): Promise<number> {
   const trimmed = dir.trim()
-  let ok = false
+  let ok: boolean
   try {
     ok = isAbsolute(trimmed) && isDirectory(trimmed)
   } catch {

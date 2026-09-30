@@ -31,9 +31,12 @@ export interface InitOptions { dryRun?: boolean }
 // ── diff 预览（spec §4.7；只 diff 对象体区间）──
 function printInjectDiff(hostPath: string, source: string, after: string, mode: 'inject' | 'remove', dryRun: boolean): void {
   const cmd = mode === 'inject' ? 'init' : 'uninit'
-  const title = dryRun
-    ? `${cmd} dry-run 执行计划（不落任何盘、不执行任何子进程）：`
-    : mode === 'inject' ? '注入计划：' : '摘除计划：'
+  let title: string
+  if (dryRun) {
+    title = `${cmd} dry-run 执行计划（不落任何盘、不执行任何子进程）：`
+  } else {
+    title = mode === 'inject' ? '注入计划：' : '摘除计划：'
+  }
   process.stdout.write(`${title}\n`)
   process.stdout.write(`  文件：${hostPath}\n`)
   const beforeLines = source.split('\n')

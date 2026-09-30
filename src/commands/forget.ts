@@ -158,7 +158,9 @@ function optionMeta(c: LinkCandidate): { label: string; hint: string } {
 }
 
 /** 「管理注册…」子界面（forget 的交互化；spec §4.5）。正常流程一律返回 'back'。
- *  注：ctx 不含 scanDirs——内部 readUserConfig() 现读（P1-7）；子界面只用 registered 部分。 */
+ *  注：ctx 不含 scanDirs——内部 readUserConfig() 现读（P1-7）；子界面只用 registered 部分。
+ *  复杂度 37：交互流程多阶段（选择/路径输入/确认），拆分属 E 类立项，暂标注豁免 */
+// eslint-disable-next-line sonarjs/cognitive-complexity
 export async function runManageRegistry(ctx: ManageRegistryCtx): Promise<'back'> {
   const { scanDirs } = await readUserConfig()
   const cand = await collectLinkCandidates(ctx.rootDir, ctx.ws, ctx.cfg, ctx.st, scanDirs)

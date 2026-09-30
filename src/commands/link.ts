@@ -295,6 +295,14 @@ function readPkgName(dirAbs: string): string | null {
   }
 }
 
+/** 已注册候选的 hint 文案（四态判定，if/else 平铺替代嵌套三元——ESLint no-nested-conditional） */
+function registeredHint(c: LinkCandidate): string {
+  if (!c.cfgIntact) return '注册值损坏：修正 lpm.config.json 后重试'
+  if (c.linked) return '已链接，将跳过'
+  if (c.hitMembers.length === 0) return '未在依赖中，链接前需先 pnpm add'
+  return c.rel
+}
+
 /** 候选集合（只读）：已注册组（★ 排序 / [已链接] / 零命中标记）+ 扫描发现组（spec §4.9） */
 export async function collectLinkCandidates(
   rootDir: string, ws: Workspace, cfg: ProjectLpmConfig | null, st: LinkState | null, scanDirs: readonly string[],
@@ -454,7 +462,9 @@ async function resolveLinkCollection(
 }
 
 /** 计划构建（统一前置判定）：前置校验 + 计划构建整体在这里。
- *  直通与交互入口共用同一份计划——预览与执行因此天然同源（PRD §13 验收 9）。 */
+ *  直通与交互入口共用同一份计划——预览与执行因此天然同源（PRD §13 验收 9）。
+ *  复杂度 64：多 target 聚合 + 幂等/前置/去重多判定，拆分属 E 类立项，暂标注豁免 */
+// eslint-disable-next-line sonarjs/cognitive-complexity
 async function buildLinkPlan(args: {
   targets: readonly string[]
   opts: LinkOptions
@@ -495,7 +505,7 @@ async function buildLinkPlan(args: {
 
     const rt = await resolveTarget(raw, cfg, rootDir, cwd)
     let libDirAbs = rt.libDirAbs
-    let libName = ''
+    let libName: string
     if (rt.source === 'name') {
       libName = rt.key
     } else {
@@ -795,7 +805,7 @@ async function addScanDir(): Promise<void> {
   const inp = await clack.text({ message: '输入扫描目录（已存在的绝对路径）', placeholder: 'D:\\Seed\\libs' })
   if (clack.isCancel(inp)) return
   const dir = String(inp).trim()
-  let ok = false
+  let ok: boolean
   try {
     ok = isAbsolute(dir) && isDirectory(dir)
   } catch {
@@ -834,13 +844,7 @@ async function pickLinkTargets(
     groups[`已注册（${cand.registered.length}）`] = cand.registered.map((c) => ({
       value: c.key,
       label: c.hitMembers.length > 0 ? `${c.key}  ★` : c.key,
-      hint: !c.cfgIntact
-        ? '注册值损坏：修正 lpm.config.json 后重试'
-        : c.linked
-          ? '已链接，将跳过'
-          : c.hitMembers.length === 0
-            ? '未在依赖中，链接前需先 pnpm add'
-            : c.rel,
+      hint: registeredHint(c),
     }))
   }
   if (cand.discovered.length > 0) {
@@ -952,7 +956,9 @@ async function runPlanAndExecute(
   return await executeLinkPlan(plan, ctx.opts)
 }
 
-/** link 交互入口：空态向导 → 主列表 → 计划预览 → 确认 → 执行（spec §4.5 / §4.7 / §4.10） */
+/** link 交互入口：空态向导 → 主列表 → 计划预览 → 确认 → 执行（spec §4.5 / §4.7 / §4.10）。
+ *  复杂度 32：交互阶段流（向导/分组列表/预览/确认），拆分属 E 类立项，暂标注豁免 */
+// eslint-disable-next-line sonarjs/cognitive-complexity
 async function runLinkInteractive(opts: LinkOptions, cwd: string): Promise<number> {
   if (process.stdin.isTTY !== true) {
     process.stdout.write(`当前不是交互终端；直通用法：${LINK_USAGE}\n`)

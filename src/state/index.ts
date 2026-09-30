@@ -176,7 +176,7 @@ export async function writeUserConfig(cfg: UserLpmConfig): Promise<void> {
   writeJsonFileAtomic(p, cfg)
 }
 
-/** 归一化（S4 spec §4.4）：trim → 循环剥前导 '/' 或 '**/'、剥尾 '/**'、'/*'、'/' 至稳定 → 与 '.lpm' 全等 */
+/** 归一化（S4 spec §4.4）：trim → 循环剥前导斜杠或双星斜杠、剥尾斜杠双星、斜杠星、斜杠，至稳定 → 与 .lpm 全等 */
 function normalizeGitignoreLine(line: string): string {
   let s = line.trim()
   let prev: string

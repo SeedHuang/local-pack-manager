@@ -143,7 +143,9 @@ function isWs(ch: string): boolean {
  *  - 段键/包名 key 比对均先经 JSON 转义解码（F2，如 "@scope\/pkg" 不得漏命中）
  *  - 深度 1 识别段键，段体（深度 2）内 key 与 pkgName 全等（解码后 ===）
  *  - 重复段/重复 key 全部记录（F3），去重归 keys 输出层
- *  - 字符串状态机防 scripts 值内花括号/引号字样干扰；未闭合字面量不记命中（计划期修订 2） */
+ *  - 字符串状态机防 scripts 值内花括号/引号字样干扰；未闭合字面量不记命中（计划期修订 2）
+ *  复杂度 52：字符串状态机多态扫描，拆分属 E 类立项，暂标注豁免 */
+// eslint-disable-next-line sonarjs/cognitive-complexity
 function scanManifest(source: string, pkgName: string): DepHitPoint[] {
   const hits: DepHitPoint[] = []
   let depth = 0

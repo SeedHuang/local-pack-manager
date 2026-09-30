@@ -306,9 +306,11 @@ function collectMembers(rootDir: string, patterns: string[]): PackageJsonInfo[] 
   const negatives = patterns.filter((p) => p.startsWith('!')).map((p) => p.slice(1))
   const collected: string[] = []
   const walk = (dir: string, rel: string): void => {
-    const entries = readdirSync(dir, { withFileTypes: true }).sort((a, b) =>
-      a.name < b.name ? -1 : a.name > b.name ? 1 : 0,
-    )
+    const entries = readdirSync(dir, { withFileTypes: true }).sort((a, b) => {
+      if (a.name < b.name) return -1
+      if (a.name > b.name) return 1
+      return 0
+    })
     for (const entry of entries) {
       if (entry.isSymbolicLink()) continue
       if (!entry.isDirectory()) continue

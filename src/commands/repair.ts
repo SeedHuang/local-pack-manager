@@ -98,6 +98,8 @@ interface RewriteAgg { manifestPath: string; rel: string; content: string; detai
 
 // ─────────────────────────── 计划构建（统一前置判定）───────────────────────────
 
+// 复杂度 71：六族判定 + 逐文件三态聚合，拆分属 E 类立项，暂标注豁免
+// eslint-disable-next-line sonarjs/cognitive-complexity
 async function buildPlan(
   rootDir: string,
   pm: PackageManagerId,
@@ -257,9 +259,9 @@ async function planOrphan(
   const libDirCandidate = resolve(dirname(f.manifestPath), stripProtocol(f.declared))
   const dirValid = existsSync(libDirCandidate) && existsSync(resolve(libDirCandidate, 'package.json'))
 
-  // 原值三级来源
-  let original: string | null = null
-  let sourceNote = ''
+  // 原值三级来源（三个分支均赋值或 return，走到使用时必已赋值）
+  let original: string | null
+  let sourceNote: string
   const sibling = siblingOriginal(entry, f)
   if (sibling !== null) {
     original = sibling.value
@@ -378,6 +380,8 @@ function verifyAll(targets: InstallTarget[]): Array<{ t: InstallTarget; ok: bool
   })
 }
 
+// 复杂度 57：写序五段（改写/install/复验/档案/留痕）多步校验，拆分属 E 类立项，暂标注豁免
+// eslint-disable-next-line sonarjs/cognitive-complexity
 async function execute(
   plan: Plan,
   rootDir: string,

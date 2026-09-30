@@ -12,10 +12,11 @@
     "build": "tsup",
     "dev": "tsup --watch",
     "typecheck": "tsc --noEmit",
+    "lint": "eslint src --max-warnings 0",
     "test": "vitest run tests/unit",
     "test:coverage": "vitest run tests/unit --coverage",
     "test:e2e": "vitest run tests/e2e",
-    "verify": "pnpm typecheck && pnpm build && pnpm test:coverage && pnpm test:e2e",
+    "verify": "pnpm typecheck && pnpm lint && pnpm build && pnpm test:coverage && pnpm test:e2e",
     "localG": "pnpm build && npm install -g .",
     "localG:rm": "npm uninstall -g lpm"
   },
@@ -25,10 +26,14 @@
     "execa": "^10.0.1"
   },
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
     "@types/node": "^26.6.2",
     "@vitest/coverage-v8": "^5.0.2",
+    "eslint": "^10.11.0",
+    "eslint-plugin-sonarjs": "^4.2.2",
     "tsup": "^8.5.1",
-    "typescript": "^7.0.2",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.71.0",
     "vitest": "^5.0.1"
   }
 }

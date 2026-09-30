@@ -76,7 +76,9 @@ function sectionsOf(manifestPath: string, key: string): string[] {
   catch { return [] }
 }
 
-/** 判定面（只读）：注册 ∪ 档案 ∪ 本地声明 求并集 → 逐库三列（档案 / 声明 / node_modules）判六族 */
+/** 判定面（只读）：注册 ∪ 档案 ∪ 本地声明 求并集 → 逐库三列（档案 / 声明 / node_modules）判六族。
+ *  复杂度 108：并集遍历 + 逐库三列六族判定，拆分属 E 类立项，暂标注豁免 */
+// eslint-disable-next-line sonarjs/cognitive-complexity
 export async function scanLinkState(rootDir: string, ws: Workspace, cfg: ProjectLpmConfig | null, st: LinkState | null): Promise<ScanOutcome> {
   const keys = new Set<string>()
   for (const k of Object.keys(cfg?.libs ?? {})) keys.add(k)
@@ -221,7 +223,8 @@ function printReport(pm: PackageManagerId, scan: ScanOutcome): void {
     process.stdout.write(`\n⚠️ ${e.key} —— ${e.issues.map((f) => FAMILY_LABEL[f]).join('、')}\n`)
     if (e.original !== undefined) {
       const recs = Object.entries(e.original).map(([k, v]) => `${k}：${v}`).join('、')
-      process.stdout.write(`   档案记录：${recs}${e.linkedAt !== undefined ? `（${e.linkedAt} 链接）` : ''}\n`)
+      const linkedAtSuffix = e.linkedAt !== undefined ? `（${e.linkedAt} 链接）` : ''
+      process.stdout.write(`   档案记录：${recs}${linkedAtSuffix}\n`)
     }
     for (const f of e.files) {
       const declared = f.declared === '' ? '（无声明）' : f.declared

@@ -182,7 +182,9 @@ interface UnlinkPlan {
 }
 
 /** 计划构建：把原 runUnlink 的 B/C/D 整体搬入。直通与交互入口共用同一份计划——
- *  预览与执行因此天然同源（PRD §13 验收 9）。 */
+ *  预览与执行因此天然同源（PRD §13 验收 9）。
+ *  复杂度 71：多 key 聚合 + 三态校验，拆分属 E 类立项，暂标注豁免 */
+// eslint-disable-next-line sonarjs/cognitive-complexity
 async function buildUnlinkPlan(args: {
   targets: readonly string[]
   opts: UnlinkOptions
@@ -384,7 +386,9 @@ function unlinkPlanView(plan: UnlinkPlan): PlanView {
   return { entries, install, watch: [] }
 }
 
-/** 执行（写序 = S7 裁决：恢复文件 → install 成功 → 才删 state） */
+/** 执行（写序 = S7 裁决：恢复文件 → install 成功 → 才删 state）。
+ *  复杂度 53：恢复/复验/force/删档多段校验，拆分属 E 类立项，暂标注豁免 */
+// eslint-disable-next-line sonarjs/cognitive-complexity
 async function executeUnlinkPlan(plan: UnlinkPlan): Promise<number> {
   const {
     rootDir, pm, cfg, st, aggregated, pendingDelete, verifyManifests, planIdempotent,
@@ -417,7 +421,8 @@ async function executeUnlinkPlan(plan: UnlinkPlan): Promise<number> {
     const bad = findings.filter((f) => f.status !== 'ok')
     if (bad.length > 0) {
       for (const f of bad) {
-        process.stdout.write(`警告：node_modules ${f.status === 'residue' ? `残留（${f.note ?? '软链残留'}）` : '缺失'}：${f.nmRel}——${buildForceInstallCommandLine(pm)} 重建\n`)
+        const what = f.status === 'residue' ? `残留（${f.note ?? '软链残留'}）` : '缺失'
+        process.stdout.write(`警告：node_modules ${what}：${f.nmRel}——${buildForceInstallCommandLine(pm)} 重建\n`)
       }
       await runForceInstall(rootDir, pm, UNLINK_RETRY_ADVICE)
       traceInstalls.push({ command: buildForceInstallCommandLine(pm), ok: true, exitCode: 0 })

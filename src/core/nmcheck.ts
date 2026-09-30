@@ -35,7 +35,7 @@ export function probeNodeModules(manifestPath: string, key: string, expectedLibR
   if (!existsSync(nmEntry)) {
     // existsSync 跟随链接：false = 不存在或悬空——lstat 不跟随，成功即悬空链接
     let dangling = false
-    try { lstatSync(nmEntry); dangling = true } catch { dangling = false }
+    try { lstatSync(nmEntry); dangling = true } catch { /* 保持 false */ }
     return dangling ? { status: 'dangling', note: '悬空链接' } : { status: 'missing' }
   }
   let real: string

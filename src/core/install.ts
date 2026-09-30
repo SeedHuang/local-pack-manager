@@ -67,7 +67,7 @@ async function execInstall(binary: string, args: readonly string[], rootDir: str
   try {
     await execa(binary, [...args], { cwd: rootDir, stdio: ['inherit', 'inherit', 'pipe'] })
   } catch (err) {
-    const e = err as { exitCode?: number | null; stderr?: string | undefined }
+    const e = err as { exitCode?: number | null; stderr?: string }
     const stderrTail = (e.stderr ?? '').slice(-2000)
     throw installError(command, e.exitCode ?? null, stderrTail, advice)
   }
