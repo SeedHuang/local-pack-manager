@@ -241,7 +241,7 @@ export async function ternaryOriginal(
    → 修复：lpm repair（将清除损坏记录）
 ```
 
-正常项折叠为一行（如「其余 1 个已注册库当前使用正式版本，正常」）。
+正常项折叠为一行（无异常且无备注的条目；按实际状态分类——已链接生效 vs 正式版本，如「其余 1 个库状态正常（1 个本地链接生效）」「其余 2 个库状态正常（2 个使用正式版本）」）。
 
 **`--json` 结构**（顶层 `version` / `rootDir` / `packageManager` / `summary` / `entries`）：
 

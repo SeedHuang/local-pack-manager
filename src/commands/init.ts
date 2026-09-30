@@ -13,6 +13,7 @@ import {
   InitHostPkgError,
   InitIncompleteMarkerError,
   InitInteractionError,
+  InitKeyNotObjectError,
   InitNotInjectedError,
   InitRootError,
   buildAliasMap,
@@ -53,7 +54,7 @@ function printInjectDiff(hostPath: string, source: string, after: string, mode: 
 function reportError(err: unknown): number {
   const KNOWN = [
     InitConfigNotFoundError, InitConfigShapeError, InitRootError, InitHostPkgError, InitInteractionError,
-    InitAlreadyInjectedError, InitNotInjectedError, InitIncompleteMarkerError,
+    InitAlreadyInjectedError, InitNotInjectedError, InitIncompleteMarkerError, InitKeyNotObjectError,
     WorkspaceNotFoundError, ManifestParseError, LpmConfigParseError,
   ]
   return reportKnownError(err, KNOWN)
@@ -63,6 +64,52 @@ async function ensureInitPreconditions(cwd: string): Promise<{ hostPath: string;
   const hostPath = findHostConfig(cwd)
   const source = stripBom(readFileSync(hostPath, 'utf8'))
   return { hostPath, source }
+}
+
+/** 注入计算核心（runInit / autoInitAfterLink 共用，防两处漂移）：读配置 → 算 root/alias → 生成注入后文本。
+ *  libs 为空 → libsEmpty（调用方各自处理文案与返回值）。 */
+async function computeInjectionPlan(
+  source: string,
+  cwd: string,
+  rootDir: string,
+): Promise<
+  | { libsEmpty: true }
+  | { libsEmpty: false; libDirs: string[]; root: string; alias: Record<string, string>; skipped: string[]; after: string; hasShadow: boolean }
+> {
+  const cfg = await readProjectConfig(rootDir)
+  const libRels = Object.values(cfg?.libs ?? {})
+  if (libRels.length === 0) return { libsEmpty: true }
+  const libDirs = libRels.map((rel) => resolve(rootDir, rel))
+  const root = buildRootValue(cwd, libDirs)
+  const { alias, skipped } = buildAliasMap(cwd, rootDir, libDirs)
+  const hasShadow = hasTopLevelKeys(source, ['utoopack', 'alias'])
+  const after = injectAdaptation(source, root, alias)
+  return { libsEmpty: false, libDirs, root, alias, skipped, after, hasShadow }
+}
+
+/** 注入完成提示（runInit / autoInitAfterLink 共用同一文案块，防漂移；extraHint 插在「如需还原」前） */
+function printInjectionSummary(
+  headline: string,
+  hostPath: string,
+  libDirs: string[],
+  root: string,
+  alias: Record<string, string>,
+  skipped: string[],
+  extraHint?: string,
+): void {
+  process.stdout.write(`${headline}：${hostPath}\n`)
+  process.stdout.write(`  root：${root}（覆盖 ${libDirs.length} 个已注册 lib 的公共祖先）\n`)
+  const aliasCount = Object.keys(alias).length
+  if (aliasCount > 0) process.stdout.write(`  dedupe：${aliasCount} 个 peer（${Object.keys(alias).join('、')}）\n`)
+  else process.stdout.write('  未检测到需要 dedupe 的 peer（lib peer ∩ 宿主直接依赖 为空），仅注入 root\n')
+  if (skipped.length > 0) process.stdout.write(`  提示：以下 peer 已声明但宿主/workspace 均未安装，未注入 alias（${skipped.join('、')}）\n`)
+  if (extraHint !== undefined) process.stdout.write(`${extraHint}\n`)
+  process.stdout.write('如需还原配置（摘除注入片段），运行 lpm uninit。\n')
+}
+
+/** 摘除完成提示（runUninit / autoUninitAfterUnlinkAll 共用同一行，防漂移；headline 区分「已摘除/已自动摘除」） */
+function printRemovalSummary(headline: string, hostPath: string): void {
+  process.stdout.write(`${headline}：${hostPath}（宿主原有 utoopack/alias 配置已还原）\n`)
 }
 
 export async function runInit(cwd: string = process.cwd(), opts: InitOptions = {}): Promise<number> {
@@ -75,19 +122,14 @@ export async function runInit(cwd: string = process.cwd(), opts: InitOptions = {
       throw new InitAlreadyInjectedError()
     }
     const rootDir = await findWorkspaceRoot(cwd)
-    const cfg = await readProjectConfig(rootDir)
-    const libRels = Object.values(cfg?.libs ?? {})
-    if (libRels.length === 0) {
+    const plan = await computeInjectionPlan(source, cwd, rootDir)
+    if (plan.libsEmpty) {
       process.stdout.write('当前没有任何已注册的 lib。\n下一步：先 lpm link <路径> 注册后再 init\n')
       return 0
     }
-    const libDirs = libRels.map((rel) => resolve(rootDir, rel))
-    const root = buildRootValue(cwd, libDirs)
-    const { alias, skipped } = buildAliasMap(cwd, rootDir, libDirs)
+    const { libDirs, root, alias, skipped, after, hasShadow } = plan
     // OCR M1：遮蔽判定收窄到对象体顶层键（不再全文件子串扫描——注释/webpack resolve.alias 等不误报）
     // S14 方案 A：宿主已有同名键 → 合并进该键内部（不再追加新键规避 TS1117/2783），无遮蔽覆盖
-    const hasShadow = hasTopLevelKeys(source, ['utoopack', 'alias'])
-    const after = injectAdaptation(source, root, alias)
     if (hasShadow) process.stdout.write('提示：检测到宿主已有 utoopack/alias 配置，已合并进宿主键；uninit 后可还原\n')
     if (opts.dryRun === true) { printInjectDiff(hostPath, source, after, 'inject', true); return 0 }
     if (process.stdin.isTTY !== true) throw new InitInteractionError('init')
@@ -95,15 +137,7 @@ export async function runInit(cwd: string = process.cwd(), opts: InitOptions = {
     const ok = await clack.confirm({ message: `执行以上注入？（写入 ${hostPath}）`, initialValue: false })
     if (clack.isCancel(ok) || ok !== true) { process.stdout.write('已取消\n'); return 1 }
     writeTextFileAtomic(hostPath, after)
-    const aliasCount = Object.keys(alias).length
-    process.stdout.write(`已注入 utoopack 适配片段：${hostPath}\n`)
-    process.stdout.write(`  root：${root}（覆盖 ${libDirs.length} 个已注册 lib 的公共祖先）\n`)
-    if (aliasCount > 0) process.stdout.write(`  dedupe：${aliasCount} 个 peer（${Object.keys(alias).join('、')}）\n`)
-    else process.stdout.write('  未检测到需要 dedupe 的 peer（lib peer ∩ 宿主直接依赖 为空），仅注入 root\n')
-    // OCR M2：declared 但未安装的 peer 提示（spec §8 自决 11「跳过 + 提示」由 runInit 落盘）
-    if (skipped.length > 0) process.stdout.write(`  提示：以下 peer 已声明但宿主/workspace 均未安装，未注入 alias（${skipped.join('、')}）\n`)
-    process.stdout.write('若 lib 后续新增 peer，请重跑 lpm init 重新注入。\n')
-    process.stdout.write('如需还原配置（摘除注入片段），运行 lpm uninit。\n')
+    printInjectionSummary('已注入 utoopack 适配片段', hostPath, libDirs, root, alias, skipped, '若 lib 后续新增 peer，请重跑 lpm init 重新注入。')
     return 0
   } catch (err) {
     return reportError(err)
@@ -122,7 +156,7 @@ export async function runUninit(cwd: string = process.cwd(), opts: InitOptions =
     const ok = await clack.confirm({ message: `执行以上摘除？（写入 ${hostPath}）`, initialValue: false })
     if (clack.isCancel(ok) || ok !== true) { process.stdout.write('已取消\n'); return 1 }
     writeTextFileAtomic(hostPath, after)
-    process.stdout.write(`已摘除 utoopack 适配片段：${hostPath}（宿主原有 utoopack/alias 配置已还原）\n`)
+    printRemovalSummary('已摘除 utoopack 适配片段', hostPath)
     return 0
   } catch (err) {
     return reportError(err)
@@ -146,34 +180,31 @@ export async function locateHostConfigInWs(rootDir: string): Promise<{ dir: stri
  * 失败不抛错——联动是附加动作，link 主流程已完成，失败只提示用户手动 lpm init。
  * @returns 注入结果（供调用方决定是否打印提示）
  */
-export async function autoInitAfterLink(rootDir: string): Promise<{ injected: boolean; hostPath?: string; reason?: string }> {
+export async function autoInitAfterLink(rootDir: string): Promise<{ injected: boolean; hostPath?: string; reason?: string; error?: Error }> {
   try {
     const host = await locateHostConfigInWs(rootDir)
     if (host === null) return { injected: false, reason: 'no-umi-host' } // 非 umi 项目，跳过
     const { dir: cwd, hostPath } = host
     const source = stripBom(readFileSync(hostPath, 'utf8'))
     const marker = findMarker(source)
-    if (marker !== null) return { injected: false, reason: 'already-injected' } // 幂等：已注入
-    const cfg = await readProjectConfig(rootDir)
-    const libRels = Object.values(cfg?.libs ?? {})
-    if (libRels.length === 0) return { injected: false, reason: 'no-libs' }
-    const libDirs = libRels.map((rel) => resolve(rootDir, rel))
-    const root = buildRootValue(cwd, libDirs)
-    const { alias, skipped } = buildAliasMap(cwd, rootDir, libDirs)
-    const hasShadow = hasTopLevelKeys(source, ['utoopack', 'alias'])
-    const after = injectAdaptation(source, root, alias)
-    writeTextFileAtomic(hostPath, after)
-    const aliasCount = Object.keys(alias).length
-    if (hasShadow) process.stdout.write('提示：检测到宿主已有 utoopack/alias 配置，已合并进宿主键；uninit 后可还原\n')
-    process.stdout.write(`已自动注入 utoopack 适配片段：${hostPath}\n`)
-    process.stdout.write(`  root：${root}（覆盖 ${libDirs.length} 个已注册 lib 的公共祖先）\n`)
-    if (aliasCount > 0) process.stdout.write(`  dedupe：${aliasCount} 个 peer（${Object.keys(alias).join('、')}）\n`)
-    else process.stdout.write('  未检测到需要 dedupe 的 peer（lib peer ∩ 宿主直接依赖 为空），仅注入 root\n')
-    if (skipped.length > 0) process.stdout.write(`  提示：以下 peer 已声明但宿主/workspace 均未安装，未注入 alias（${skipped.join('、')}）\n`)
-    process.stdout.write('如需还原配置（摘除注入片段），运行 lpm uninit。\n')
+    // OCR：不完整标记绝不自动改写（与 uninit 侧 I8 铁律对称）
+    if (marker !== null && !marker.complete) {
+      process.stderr.write('警告：检测到不完整的 lpm 注入标记（缺结束标记），已跳过自动注入。\n')
+      process.stderr.write('下一步：请手工删除 config 中残留的 /* lpm-inject:start */ 后重试\n')
+      return { injected: false, hostPath, reason: 'incomplete-marker' }
+    }
+    // OCR 幂等增强：已注入 ≠ 免检——先把旧标记段摘除还原宿主原配置，再按当前注册全集重算期望态；
+    // 与现文件一致 → 幂等跳过（reason=already-injected）；漂移（如新增 peer 需 dedupe、root 变化）→ 重注。
+    const base = marker !== null ? removeFragment(source) : source
+    const plan = await computeInjectionPlan(base, cwd, rootDir)
+    if (plan.libsEmpty) return { injected: false, reason: 'no-libs' }
+    if (plan.after === source) return { injected: false, reason: 'already-injected' }
+    writeTextFileAtomic(hostPath, plan.after)
+    if (plan.hasShadow) process.stdout.write('提示：检测到宿主已有 utoopack/alias 配置，已合并进宿主键；uninit 后可还原\n')
+    printInjectionSummary('已自动注入 utoopack 适配片段', hostPath, plan.libDirs, plan.root, plan.alias, plan.skipped)
     return { injected: true, hostPath }
   } catch (err) {
-    return { injected: false, reason: `error:${(err as Error).message}` }
+    return { injected: false, error: err as Error }
   }
 }
 
@@ -182,7 +213,7 @@ export async function autoInitAfterLink(rootDir: string): Promise<{ injected: bo
  * 不完整标记（有 start 无 end）**绝不自动摘除**（S13 I8 铁律）——报错提示手动处理。
  * 失败不抛错——联动是附加动作，unlink 主流程已完成。
  */
-export async function autoUninitAfterUnlinkAll(rootDir: string): Promise<{ removed: boolean; hostPath?: string; reason?: string }> {
+export async function autoUninitAfterUnlinkAll(rootDir: string): Promise<{ removed: boolean; hostPath?: string; reason?: string; error?: Error }> {
   try {
     const host = await locateHostConfigInWs(rootDir)
     if (host === null) return { removed: false, reason: 'no-umi-host' }
@@ -198,9 +229,9 @@ export async function autoUninitAfterUnlinkAll(rootDir: string): Promise<{ remov
     }
     const after = removeFragment(source)
     writeTextFileAtomic(hostPath, after)
-    process.stdout.write(`已自动摘除 utoopack 适配片段：${hostPath}（宿主原有 utoopack/alias 配置已还原）\n`)
+    printRemovalSummary('已自动摘除 utoopack 适配片段', hostPath)
     return { removed: true, hostPath }
   } catch (err) {
-    return { removed: false, reason: `error:${(err as Error).message}` }
+    return { removed: false, error: err as Error }
   }
 }

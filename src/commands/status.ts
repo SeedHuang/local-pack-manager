@@ -249,7 +249,7 @@ function printReport(pm: PackageManagerId, scan: ScanOutcome): void {
     const parts: string[] = []
     if (linked > 0) parts.push(`${linked} 个本地链接生效`)
     if (formal > 0) parts.push(`${formal} 个使用正式版本`)
-    process.stdout.write(`其余 ${silentOk.length} 个库状态正常${parts.length > 0 ? `（${parts.join('，')}）` : ''}\n`)
+    process.stdout.write(`其余 ${silentOk.length} 个库状态正常（${parts.join('，')}）\n`)
   }
 }
 

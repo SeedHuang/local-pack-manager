@@ -449,14 +449,14 @@ function printInjectDiff(hostPath: string, beforeLines: string[], afterLines: st
 1. **新增 workspace 级宿主定位** `findHostConfigInWorkspace(ws)`（utoopack.ts）：遍历 workspace 成员（含根），候选文件名按序，返回 `{ dir, hostPath }`——link/unlink 在 workspace 根运行，umi 配置可能在成员子包（如 `web/.umirc.ts`），须按成员目录找而非 cwd。
 2. **新增自动联动函数**（init.ts）：
    - `locateHostConfigInWs(rootDir)`：loadWorkspace + findHostConfigInWorkspace
-   - `autoInitAfterLink(rootDir)`：复用 S13 原语（buildRootValue/buildAliasMap + S14 一站式 `injectAdaptation`——按宿主有无同名键自动「合并进键」或「追加新键」），跳过交互闸门直接写入；幂等（已注入 → already-injected）；非 umi 宿主 → no-umi-host；无 lib → no-libs；失败吞错返回 reason（不阻断 link 主流程）
-   - `autoUninitAfterUnlinkAll(rootDir)`：复用 removeFragment；未注入 → not-injected；**不完整标记绝不自动摘除（I8 铁律）**→ stderr 警告交用户手工；失败吞错
+   - `autoInitAfterLink(rootDir)`：复用 S13 原语（buildRootValue/buildAliasMap + S14 一站式 `injectAdaptation`——按宿主有无同名键自动「合并进键」或「追加新键」），跳过交互闸门直接写入；幂等增强（已注入但内容漂移——如新增 peer 需 dedupe、root 变化——先摘旧段重算期望态再重注；内容一致 → already-injected）；非 umi 宿主 → no-umi-host；无 lib → no-libs；失败返回 error 字段（不阻断 link 主流程）
+   - `autoUninitAfterUnlinkAll(rootDir)`：复用 removeFragment；未注入 → not-injected；**不完整标记绝不自动摘除（I8 铁律）**→ stderr 警告交用户手工；失败返回 error 字段
 3. **触发点**（成功路径，dry-run 天然不触发）：
    - link：**所有执行路径**之后都自愈补注入——`executeLinkPlan`（install 之后、watch 之前，watch 前台驻留会阻塞注入）＋ **直通/交互两处「计划为空」出口**（全部命中「已链接、跳过」的空跑）。抽 `ensureAutoInitAfterLink` 助手（link.ts）：无条件调用 `autoInitAfterLink`，其幂等自守（已注入/非 umi 宿主/无已注册 lib 均静默跳过）。**自愈语义**：手动 `lpm uninit` 摘掉注入后链接仍开着时，重跑 `lpm link`（哪怕空跑）即补回注入——`lpm init` 只看已注册 lib、不看链接状态，联动判断随之对齐
    - unlink：`executeUnlinkPlan` 的「全部断开（state 清空）」分支——部分断开不摘除（可能还有 lib 在联调）
 4. **失败语义**：联动失败只 stderr 警告 + 提示手动 `lpm init`/`lpm uninit`，不影响 link/unlink 退出码（联动是附加动作，主流程已完成）。
 
-**测试**：`tests/unit/init-auto.test.ts`（新，11 例）——宿主定位（子包命中/无宿主）、自动注入（成功/幂等/合并提示/非 umi/无 lib）、自动摘除（成功/未注入/不完整标记 I8/非 umi）；`tests/unit/init-inject.test.ts` 增 6 例方案 A 合并模式（合计 20 例）；`tests/unit/link-command.test.ts` 增 1 例 S14 自愈回归（空跑 link --all 补注入）。**终态实测（取数命令 `npx vitest run tests/unit`）**：unit **35 文件 / 599 例**；`npx vitest run tests/e2e` = **1 文件 / 42 例**；合计 36 文件 / 641 例，exit 0。
+**测试**：`tests/unit/init-auto.test.ts`（新，11 例）——宿主定位（子包命中/无宿主）、自动注入（成功/幂等/合并提示/非 umi/无 lib）、自动摘除（成功/未注入/不完整标记 I8/非 umi）；`tests/unit/init-inject.test.ts` 增 6 例方案 A 合并模式（合计 20 例）；`tests/unit/link-command.test.ts` 增 1 例 S14 自愈回归（空跑 link --all 补注入）。**终态实测（取数命令 `npx vitest run tests/unit`）**：unit **34 文件 / 598 例**（OCR 修复轮删除误提交的调试文件 `tests/unit/_debug.test.ts` 1 例）；`npx vitest run tests/e2e` = **1 文件 / 42 例**；合计 35 文件 / 640 例，exit 0。
 
 **真实环境验证（BFM + ai_suit_tool，2026-09-30）**：`lpm unlink`（唯一库）→ 自动摘除 `.umirc.ts` 的 lpm-inject 段、用户原 `utoopack: {}` 保留；`lpm link --watch` → 自动注入成功、tokens.css 被本地库正确解析；`pnpm dev` 全量编译通过，health 200。**方案 A 复验（同日）**：宿主 `utoopack: {}` 时 re-init 走合并进键（`root` 并入键体、alias 追加，全文单 utoopack 键），`web` 目录 `npx tsc --noEmit` 零错误（无 TS1117/TS2783）；`lpm uninit --dry-run` 预览摘除后宿主键逐字节还原 `{}`。
 

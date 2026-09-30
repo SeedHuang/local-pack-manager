@@ -53,6 +53,13 @@ export class InitIncompleteMarkerError extends Error {
     this.name = 'InitIncompleteMarkerError'
   }
 }
+/** 宿主顶层键已存在但值不是对象字面量（如 utoopack: someVar）——无法合并，追加又会撞 TS1117/TS2783 重复属性 */
+export class InitKeyNotObjectError extends Error {
+  constructor(key: string) {
+    super(`宿主配置的 ${key} 不是对象字面量（如 ${key}: someVar），无法自动合并注入。\n下一步：手工把 ${key} 改为对象字面量（${key}: { ... }）后重试，或删除该键让 lpm 追加`)
+    this.name = 'InitKeyNotObjectError'
+  }
+}
 
 // ── 标记常量（单源；spec §3.1）──
 const INJECT_START = '/* lpm-inject:start */'
@@ -185,34 +192,10 @@ export function locateConfigObject(source: string): { start: number; end: number
   return { start: open, end: close }
 }
 
-/** 检测配置对象体的**顶层**键（OCR M1 遮蔽判定收紧）：locateConfigObject 定位对象体后，深度 0 扫键名。
- *  只认对象体直接子键（嵌套对象/webpack resolve.alias/注释/字符串内的同名键不算）——替代 init.ts 原先的全文件子串扫描。 */
+/** 检测配置对象体的**顶层**键（OCR M1 遮蔽判定收紧）：只认对象体直接子键（嵌套对象/webpack resolve.alias/注释/字符串内的同名键不算）。
+ *  与 hasTopLevelKey 同一扫描循环（scanTopLevelKeyHit 单源），此处只是对键名数组求 some。 */
 export function hasTopLevelKeys(source: string, keys: readonly string[]): boolean {
-  const range = locateConfigObject(source)
-  if (range === null) return false
-  const body = source.slice(range.start + 1, range.end) // 对象体内容（不含外层 { }）
-  const keySet = new Set(keys)
-  let depth = 0
-  let i = 0
-  while (i < body.length) {
-    const skipped = skipIgnorable(body, i)
-    if (skipped !== i) { i = skipped; continue }
-    const ch = body[i]
-    if (ch === '{') { depth++; i++; continue }
-    if (ch === '}') { depth--; i++; continue }
-    if (depth === 0 && /[A-Za-z_$]/.test(ch)) {
-      let j = i
-      while (j < body.length && /[A-Za-z0-9_$]/.test(body[j] as string)) j++
-      const name = body.slice(i, j)
-      let k = j
-      while (k < body.length && /\s/.test(body[k] as string)) k++
-      if (body[k] === ':' && keySet.has(name)) return true
-      i = j
-      continue
-    }
-    i++
-  }
-  return false
+  return keys.some((k) => hasTopLevelKey(source, k))
 }
 
 /** 顶层键扫描单步（供 locateTopLevelKeyObject 降复杂度，认知复杂度从 37 → 拆分）：
@@ -238,10 +221,11 @@ function scanTopLevelKey(body: string, i: number, keyName: string): KeyScanHit {
   return { keyEnd: j, open: v, close }
 }
 
-/** 定位配置对象体顶层 `<keyName>` 键的对象体范围（绝对下标；值须为 `{...}`）。
- *  S14 方案 A：宿主已有同名键时不再「追加新键」——TS 不允许同名属性（TS1117/TS2783），
- *  改为**合并进宿主键对象体内部**。该函数即定位合并插入点；找不到 → null（宿主无此键，走追加）。 */
-export function locateTopLevelKeyObject(source: string, keyName: string): { start: number; end: number } | null {
+/** 顶层键扫描循环（locateTopLevelKeyObject / hasTopLevelKey / hasTopLevelKeys 共用单源）：
+ *  配置对象体深度 0 扫 `<keyName>` 键（嵌套/注释/字符串内不算）。命中 → open/close（**绝对下标**，值为对象字面量）
+ *  或 nonObject=true（值非对象字面量，无法合并）；无此键 → null。 */
+type TopLevelKeyHit = { open: number; close: number } | { nonObject: true }
+function scanTopLevelKeyHit(source: string, keyName: string): TopLevelKeyHit | null {
   const range = locateConfigObject(source)
   if (range === null) return null
   const bodyStart = range.start + 1
@@ -256,8 +240,8 @@ export function locateTopLevelKeyObject(source: string, keyName: string): { star
     if (ch === '}') { depth--; i++; continue }
     if (depth === 0 && /[A-Za-z_$]/.test(ch)) {
       const hit = scanTopLevelKey(body, i, keyName)
-      if ('nonObject' in hit) return null // 键存在但值不是对象 → 无法合并，按无此键处理
-      if ('open' in hit) return { start: bodyStart + hit.open, end: bodyStart + hit.close }
+      if ('nonObject' in hit) return { nonObject: true }
+      if ('open' in hit) return { open: bodyStart + hit.open, close: bodyStart + hit.close }
       i = hit.keyEnd
       continue
     }
@@ -266,13 +250,72 @@ export function locateTopLevelKeyObject(source: string, keyName: string): { star
   return null
 }
 
+/** 定位配置对象体顶层 `<keyName>` 键的对象体范围（绝对下标；值须为 `{...}`）。
+ *  S14 方案 A：宿主已有同名键时不再「追加新键」——TS 不允许同名属性（TS1117/TS2783），
+ *  改为**合并进宿主键对象体内部**。该函数即定位合并插入点；找不到 → null（宿主无此键，走追加）。 */
+export function locateTopLevelKeyObject(source: string, keyName: string): { start: number; end: number } | null {
+  const hit = scanTopLevelKeyHit(source, keyName)
+  if (hit === null || 'nonObject' in hit) return null // 无此键 / 值非对象 → 无法合并，走追加或由调用方报错
+  return { start: hit.open, end: hit.close }
+}
+
+/** 宿主配置对象体是否已有顶层 `<keyName>` 键（值类型不限）。与 locateTopLevelKeyObject 的分工：
+ *  「无此键」→ 可追加新键；「有此键但值非对象字面量」→ 既不能合并也不能追加（追加会撞 TS1117/TS2783），
+ *  由调用方按 hasTopLevelKey=true + locateTopLevelKeyObject=null 判定后抛 InitKeyNotObjectError。 */
+export function hasTopLevelKey(source: string, keyName: string): boolean {
+  return scanTopLevelKeyHit(source, keyName) !== null
+}
+
+/** 单步扫顶层键名（topLevelKeyNames 拆复杂度用）：body[i] 为标识符或引号起始 → 返回键名与键名后下标（hasColon 指示是否真是键）；否则 null */
+type KeyNameHit = { name: string; next: number; hasColon: boolean }
+function scanTopLevelKeyName(body: string, i: number): KeyNameHit | null {
+  let j: number
+  let name: string
+  if (body[i] === '"' || body[i] === "'") {
+    j = skipString(body, i)
+    name = body.slice(i + 1, j - 1)
+  } else if (/[A-Za-z_$]/.test(body[i] as string)) {
+    j = i + 1
+    while (j < body.length && /[A-Za-z0-9_$]/.test(body[j] as string)) j++
+    name = body.slice(i, j)
+  } else {
+    return null
+  }
+  let k = j
+  while (k < body.length && /\s/.test(body[k] as string)) k++
+  return { name, next: j, hasColon: body[k] === ':' }
+}
+
+/** 对象体（绝对范围，含 { }）内顶层子键名集合（深度 0；标识符与引号键都认，嵌套/注释/字符串内不算）——合并模式查重用 */
+function topLevelKeyNames(source: string, range: { start: number; end: number }): Set<string> {
+  const body = source.slice(range.start + 1, range.end)
+  const names = new Set<string>()
+  let depth = 0
+  let i = 0
+  while (i < body.length) {
+    const ch = body[i] as string
+    // 引号键名（如 '@ant-design/icons': ...）须在 skipIgnorable 吞掉字符串之前识别；非键的字符串值 hasColon=false 同样安全跳过
+    if (depth === 0 && (ch === '"' || ch === "'" || /[A-Za-z_$]/.test(ch))) {
+      const hit = scanTopLevelKeyName(body, i)
+      if (hit !== null) {
+        if (hit.hasColon) names.add(hit.name)
+        i = hit.next
+        continue
+      }
+    }
+    const skipped = skipIgnorable(body, i)
+    if (skipped !== i) { i = skipped; continue }
+    if (ch === '{') { depth++; i++; continue }
+    if (ch === '}') { depth--; i++; continue }
+    i++
+  }
+  return names
+}
+
 // ── 标记检测（spec §4.8 自感知）──
+/** 首个标记（spec §4.8 自感知；不完整标记照实返回 complete:false）——findAllMarkers 的 [0]，消除重复扫描逻辑 */
 export function findMarker(source: string): { start: number; end: number; complete: boolean } | null {
-  const s = source.indexOf(INJECT_START)
-  if (s === -1) return null
-  const e = source.indexOf(INJECT_END, s)
-  if (e === -1) return { start: s, end: -1, complete: false }
-  return { start: s, end: e + INJECT_END.length, complete: true }
+  return findAllMarkers(source)[0] ?? null
 }
 
 // ── 公共祖先与相对路径（spec §4.4；root 计算原语）──
@@ -332,6 +375,15 @@ export function findAllMarkers(source: string): { start: number; end: number; co
   return out
 }
 
+/** alias 行渲染（buildFragment 追加 / alias 追加分支 / alias 合并分支 三处共用）：非法裸标识符加引号 + `${key}: '${v}',` */
+function renderAliasEntries(aliasMap: Record<string, string>): string[] {
+  return Object.entries(aliasMap).map(([k, v]) => {
+    // OCR H1：包名可含连字符/scope（react-dom、@ant-design/icons 等），非法裸标识符必须加引号——否则产出语法错误的 umi 配置
+    const key = JS_IDENT_RE.test(k) ? k : `'${k}'`
+    return `${key}: '${v}',`
+  })
+}
+
 /**
  * 追加模式片段（宿主**无**同名键时用）：普通键（非对象展开——无同名冲突，无需展开规避 TS1117）。
  * 标记段包裹整个新键，摘除即还原。
@@ -340,11 +392,7 @@ export function buildFragment(root: string, aliasMap: Record<string, string>): s
   const lines: string[] = [INJECT_START, 'utoopack: {', `  root: '${root}',`, '},']
   if (Object.keys(aliasMap).length > 0) {
     lines.push('alias: {')
-    for (const [k, v] of Object.entries(aliasMap)) {
-      // OCR H1：包名可含连字符/scope（react-dom、@ant-design/icons 等），非法裸标识符必须加引号——否则产出语法错误的 umi 配置
-      const key = JS_IDENT_RE.test(k) ? k : `'${k}'`
-      lines.push(`  ${key}: '${v}',`)
-    }
+    for (const line of renderAliasEntries(aliasMap)) lines.push(`  ${line}`)
     lines.push('},')
   }
   lines.push(INJECT_END)
@@ -375,12 +423,21 @@ export function injectFragment(source: string, fragment: string): string {
 export function injectIntoKey(source: string, keyName: string, bodyLines: string[]): string {
   const key = locateTopLevelKeyObject(source, keyName)
   if (key === null) throw new InitConfigShapeError()
+  // OCR：查重——宿主键体内已有同名子键（如 utoopack: { root: 'custom' } / alias: { react: ... }）时跳过该行，
+  // 避免同一对象字面量内追加同名属性（TS1117/TS2783）；全部被跳过 → 零改动返回
+  const existing = topLevelKeyNames(source, key)
+  const lines = bodyLines.filter((l) => {
+    const name = l.slice(0, l.indexOf(':'))
+    const unquoted = name.length >= 2 && (name[0] === "'" || name[0] === '"') ? name.slice(1, -1) : name.trim()
+    return !existing.has(unquoted)
+  })
+  if (lines.length === 0) return source
   const { start, end } = key
   let k = end - 1
   while (k > start && /\s/.test(source[k] as string)) k--
   const empty = k === start
   const hasTrailingComma = !empty && source[k] === ','
-  const body = [INJECT_START, ...bodyLines, INJECT_END]
+  const body = [INJECT_START, ...lines, INJECT_END]
   // 键体比配置对象体深一层：对象体行缩进 2 空格 → 键体行缩进 4 空格（与 injectFragment 的 2 空格呼应）
   const indented = body.map((l) => `    ${l}`).join('\n')
   // 空键体（{ 后紧接 }）：不加前导 \n，且首行去掉 4 空格缩进让 start 标记与 { 紧贴——} 保持原位（同行），
@@ -398,26 +455,21 @@ export function injectIntoKey(source: string, keyName: string, bodyLines: string
  */
 export function injectAdaptation(source: string, root: string, aliasMap: Record<string, string>): string {
   let out = source
-  // utoopack：合并 or 追加
-  if (locateTopLevelKeyObject(out, 'utoopack') !== null) {
+  // utoopack：合并 or 追加（键已存在但值非对象字面量 → 报错，绝不追加同名键撞 TS1117/2783）
+  if (hasTopLevelKey(out, 'utoopack')) {
+    if (locateTopLevelKeyObject(out, 'utoopack') === null) throw new InitKeyNotObjectError('utoopack')
     out = injectIntoKey(out, 'utoopack', [`root: '${root}',`])
   } else {
     out = injectFragment(out, buildFragment(root, {}))
   }
   // alias：合并 or 追加
   if (Object.keys(aliasMap).length > 0) {
-    if (locateTopLevelKeyObject(out, 'alias') !== null) {
-      const lines = Object.entries(aliasMap).map(([k, v]) => {
-        const key = JS_IDENT_RE.test(k) ? k : `'${k}'`
-        return `${key}: '${v}',`
-      })
-      out = injectIntoKey(out, 'alias', lines)
+    if (hasTopLevelKey(out, 'alias')) {
+      if (locateTopLevelKeyObject(out, 'alias') === null) throw new InitKeyNotObjectError('alias')
+      out = injectIntoKey(out, 'alias', renderAliasEntries(aliasMap))
     } else {
       const aliasLines: string[] = [INJECT_START, 'alias: {']
-      for (const [k, v] of Object.entries(aliasMap)) {
-        const key = JS_IDENT_RE.test(k) ? k : `'${k}'`
-        aliasLines.push(`  ${key}: '${v}',`)
-      }
+      for (const line of renderAliasEntries(aliasMap)) aliasLines.push(`  ${line}`)
       aliasLines.push('},', INJECT_END)
       out = injectFragment(out, aliasLines.join('\n'))
     }

@@ -467,8 +467,8 @@ async function executeUnlinkPlan(plan: UnlinkPlan): Promise<number> {
     // S14 自动联动：全部断开后自动摘除 utoopack 适配（若宿主是 umi 项目且已注入）。
     // 只在这条"全部断开"分支触发——部分断开不摘除（可能还有 lib 在联调）。失败不阻断主流程。
     const auto = await autoUninitAfterUnlinkAll(rootDir)
-    if (auto.removed === false && typeof auto.reason === 'string' && auto.reason.startsWith('error:')) {
-      process.stderr.write(`警告：unlink 后自动摘除 utoopack 适配失败（断开本身不受影响）：${auto.reason.slice(6)}\n下一步：手动运行 lpm uninit（在含 umi 配置的目录）\n`)
+    if (auto.removed === false && auto.error !== undefined) {
+      process.stderr.write(`警告：unlink 后自动摘除 utoopack 适配失败（断开本身不受影响）：${auto.error.message}\n下一步：手动运行 lpm uninit（在含 umi 配置的目录）\n`)
     }
   } else if (pendingDelete.length > 0) {
     await writeState(rootDir, { version: 1, links: remaining })

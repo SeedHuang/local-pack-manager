@@ -676,8 +676,8 @@ async function refreshLastQuietly(rootDir: string): Promise<void> {
  *  失败仅 stderr 警告，不阻断 link 主流程——注入是附加动作。 */
 async function ensureAutoInitAfterLink(rootDir: string): Promise<void> {
   const auto = await autoInitAfterLink(rootDir)
-  if (auto.injected === false && typeof auto.reason === 'string' && auto.reason.startsWith('error:')) {
-    process.stderr.write(`警告：自动注入 utoopack 适配失败（链接操作本身不受影响）：${auto.reason.slice(6)}\n下一步：手动运行 lpm init（在含 umi 配置的目录）\n`)
+  if (auto.injected === false && auto.error !== undefined) {
+    process.stderr.write(`警告：自动注入 utoopack 适配失败（链接操作本身不受影响）：${auto.error.message}\n下一步：手动运行 lpm init（在含 umi 配置的目录）\n`)
   }
 }
 
