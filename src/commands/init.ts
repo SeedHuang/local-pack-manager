@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import * as clack from '@clack/prompts'
 import { stripBom } from '../util.js'
-import { findWorkspaceRoot } from '../core/workspace.js'
+import { findWorkspaceRoot, loadWorkspace } from '../core/workspace.js'
 import { readProjectConfig, LpmConfigParseError } from '../state/index.js'
 import { writeTextFileAtomic } from '../state/atomic.js'
 import { WorkspaceNotFoundError, ManifestParseError } from '../core/workspace.js'
@@ -16,12 +16,12 @@ import {
   InitNotInjectedError,
   InitRootError,
   buildAliasMap,
-  buildFragment,
   buildRootValue,
   findHostConfig,
+  findHostConfigInWorkspace,
   findMarker,
   hasTopLevelKeys,
-  injectFragment,
+  injectAdaptation,
   removeFragment,
 } from '../core/utoopack.js'
 import { reportError as reportKnownError } from './errors.js'
@@ -85,10 +85,10 @@ export async function runInit(cwd: string = process.cwd(), opts: InitOptions = {
     const root = buildRootValue(cwd, libDirs)
     const { alias, skipped } = buildAliasMap(cwd, rootDir, libDirs)
     // OCR M1：遮蔽判定收窄到对象体顶层键（不再全文件子串扫描——注释/webpack resolve.alias 等不误报）
+    // S14 方案 A：宿主已有同名键 → 合并进该键内部（不再追加新键规避 TS1117/2783），无遮蔽覆盖
     const hasShadow = hasTopLevelKeys(source, ['utoopack', 'alias'])
-    const fragment = buildFragment(root, alias)
-    const after = injectFragment(source, fragment)
-    if (hasShadow) process.stdout.write('提示：检测到宿主已有 utoopack/alias 配置，lpm 片段将覆盖之；uninit 后可还原\n')
+    const after = injectAdaptation(source, root, alias)
+    if (hasShadow) process.stdout.write('提示：检测到宿主已有 utoopack/alias 配置，已合并进宿主键；uninit 后可还原\n')
     if (opts.dryRun === true) { printInjectDiff(hostPath, source, after, 'inject', true); return 0 }
     if (process.stdin.isTTY !== true) throw new InitInteractionError('init')
     printInjectDiff(hostPath, source, after, 'inject', false)
@@ -103,6 +103,7 @@ export async function runInit(cwd: string = process.cwd(), opts: InitOptions = {
     // OCR M2：declared 但未安装的 peer 提示（spec §8 自决 11「跳过 + 提示」由 runInit 落盘）
     if (skipped.length > 0) process.stdout.write(`  提示：以下 peer 已声明但宿主/workspace 均未安装，未注入 alias（${skipped.join('、')}）\n`)
     process.stdout.write('若 lib 后续新增 peer，请重跑 lpm init 重新注入。\n')
+    process.stdout.write('如需还原配置（摘除注入片段），运行 lpm uninit。\n')
     return 0
   } catch (err) {
     return reportError(err)
@@ -125,5 +126,81 @@ export async function runUninit(cwd: string = process.cwd(), opts: InitOptions =
     return 0
   } catch (err) {
     return reportError(err)
+  }
+}
+
+// ─────────────────────────── 自动联动（S14：link/unlink 成功后自动 init/uninit）───────────────────────────
+
+/**
+ * 在 workspace 中定位 umi 宿主（成员级，含根）。link/unlink 运行在 workspace 根，
+ * 宿主可能是成员子包（如 web/.umirc.ts）——复用 findHostConfigInWorkspace（S13 单源）。
+ */
+export async function locateHostConfigInWs(rootDir: string): Promise<{ dir: string; hostPath: string } | null> {
+  const ws = await loadWorkspace(rootDir)
+  return findHostConfigInWorkspace(ws)
+}
+
+/**
+ * link 执行路径后自愈注入（非交互，含「计划为空」的空跑）：workspace 内找到 umi 宿主 + 未注入 → 直接写入。
+ * 复用 S13 已冻结的原语（root/alias 计算、文本级注入），**不经过 runInit 的交互闸门**。
+ * 失败不抛错——联动是附加动作，link 主流程已完成，失败只提示用户手动 lpm init。
+ * @returns 注入结果（供调用方决定是否打印提示）
+ */
+export async function autoInitAfterLink(rootDir: string): Promise<{ injected: boolean; hostPath?: string; reason?: string }> {
+  try {
+    const host = await locateHostConfigInWs(rootDir)
+    if (host === null) return { injected: false, reason: 'no-umi-host' } // 非 umi 项目，跳过
+    const { dir: cwd, hostPath } = host
+    const source = stripBom(readFileSync(hostPath, 'utf8'))
+    const marker = findMarker(source)
+    if (marker !== null) return { injected: false, reason: 'already-injected' } // 幂等：已注入
+    const cfg = await readProjectConfig(rootDir)
+    const libRels = Object.values(cfg?.libs ?? {})
+    if (libRels.length === 0) return { injected: false, reason: 'no-libs' }
+    const libDirs = libRels.map((rel) => resolve(rootDir, rel))
+    const root = buildRootValue(cwd, libDirs)
+    const { alias, skipped } = buildAliasMap(cwd, rootDir, libDirs)
+    const hasShadow = hasTopLevelKeys(source, ['utoopack', 'alias'])
+    const after = injectAdaptation(source, root, alias)
+    writeTextFileAtomic(hostPath, after)
+    const aliasCount = Object.keys(alias).length
+    if (hasShadow) process.stdout.write('提示：检测到宿主已有 utoopack/alias 配置，已合并进宿主键；uninit 后可还原\n')
+    process.stdout.write(`已自动注入 utoopack 适配片段：${hostPath}\n`)
+    process.stdout.write(`  root：${root}（覆盖 ${libDirs.length} 个已注册 lib 的公共祖先）\n`)
+    if (aliasCount > 0) process.stdout.write(`  dedupe：${aliasCount} 个 peer（${Object.keys(alias).join('、')}）\n`)
+    else process.stdout.write('  未检测到需要 dedupe 的 peer（lib peer ∩ 宿主直接依赖 为空），仅注入 root\n')
+    if (skipped.length > 0) process.stdout.write(`  提示：以下 peer 已声明但宿主/workspace 均未安装，未注入 alias（${skipped.join('、')}）\n`)
+    process.stdout.write('如需还原配置（摘除注入片段），运行 lpm uninit。\n')
+    return { injected: true, hostPath }
+  } catch (err) {
+    return { injected: false, reason: `error:${(err as Error).message}` }
+  }
+}
+
+/**
+ * unlink 全部断开后自动摘除（非交互）：workspace 内找到 umi 宿主 + 已注入 → 直接摘除。
+ * 不完整标记（有 start 无 end）**绝不自动摘除**（S13 I8 铁律）——报错提示手动处理。
+ * 失败不抛错——联动是附加动作，unlink 主流程已完成。
+ */
+export async function autoUninitAfterUnlinkAll(rootDir: string): Promise<{ removed: boolean; hostPath?: string; reason?: string }> {
+  try {
+    const host = await locateHostConfigInWs(rootDir)
+    if (host === null) return { removed: false, reason: 'no-umi-host' }
+    const { hostPath } = host
+    const source = stripBom(readFileSync(hostPath, 'utf8'))
+    const marker = findMarker(source)
+    if (marker === null) return { removed: false, reason: 'not-injected' } // 未注入，跳过
+    if (!marker.complete) {
+      // I8：不完整标记绝不自动摘除（可能误删宿主配置），交用户手工
+      process.stderr.write('警告：检测到不完整的 lpm 注入标记（缺结束标记），已跳过自动摘除。\n')
+      process.stderr.write('下一步：请手工删除 config 中残留的 /* lpm-inject:start */ 后重试\n')
+      return { removed: false, hostPath, reason: 'incomplete-marker' }
+    }
+    const after = removeFragment(source)
+    writeTextFileAtomic(hostPath, after)
+    process.stdout.write(`已自动摘除 utoopack 适配片段：${hostPath}（宿主原有 utoopack/alias 配置已还原）\n`)
+    return { removed: true, hostPath }
+  } catch (err) {
+    return { removed: false, reason: `error:${(err as Error).message}` }
   }
 }

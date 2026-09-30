@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { collectLinkCandidates, parsePathInput, PathInputError } from '../../src/commands/link.js'
+import { collectLinkCandidates, parsePathInput, PathInputError, resolveMonorepo } from '../../src/commands/link.js'
 import { loadWorkspace } from '../../src/core/workspace.js'
 import type { LinkState, ProjectLpmConfig } from '../../src/state/types.js'
 
@@ -139,5 +139,19 @@ describe('collectLinkCandidates', () => {
     expect(discovered.map((d) => d.key)).toEqual(['@t/lib', '@t/none'])
     expect(discovered[0].hitMembers.length).toBeGreaterThan(0)
     expect(discovered[1].hitMembers.length).toBe(0)
+  })
+})
+
+describe('resolveMonorepo', () => {
+  it('RM-1：pnpm-workspace.yaml 存在但无 packages 子包（单成员根）→ 直接选根，不要求交互', async () => {
+    // 反例来源：ai_suit_tool 只有 allowBuilds、没有 packages —— 修复前在非 TTY 下
+    // 抛 member-select 交互错误，自动化环境卡死
+    const lib = mkTree({
+      'package.json': JSON.stringify({ name: '@t/solo', main: './dist/index.js' }),
+      'pnpm-workspace.yaml': "allowBuilds:\n  esbuild: true\n",
+    })
+    const r = await resolveMonorepo(lib)
+    expect(r.libDirAbs).toBe(lib)
+    expect(r.name).toBe('@t/solo')
   })
 })

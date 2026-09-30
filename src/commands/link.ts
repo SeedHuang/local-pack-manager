@@ -39,6 +39,7 @@ import { traceFailure } from './run-trace.js'
 import { renderPlan, type PlanEntry, type PlanView } from './plan-view.js'
 import { reportError as reportKnownError } from './errors.js'
 import { PresetError, readPresets } from './preset.js'
+import { autoInitAfterLink } from './init.js'
 
 interface LinkOptions {
   watch?: boolean
@@ -149,6 +150,12 @@ export async function resolveMonorepo(libDirAbs: string): Promise<{ libDirAbs: s
 }
 
 async function pickMember(libDirAbs: string, members: PackageJsonInfo[]): Promise<{ libDirAbs: string; name: string }> {
+  // 成员唯一 → 直接选它，不交互。否则「有 pnpm-workspace.yaml 但无 packages 子包」
+  // 的单包库（如只写了 allowBuilds 的 ai_suit_tool）在非 TTY 下会卡死在 member-select。
+  if (members.length === 1) {
+    const m = members[0] as PackageJsonInfo
+    return { libDirAbs: m.dir, name: m.name }
+  }
   if (!process.stdin.isTTY) {
     const names = members.map((m) => (m.isRoot ? '（根）' : '') + (m.name !== '' ? m.name : toRel(libDirAbs, m.dir)))
     throw new LinkInteractionError('member-select', `${libDirAbs} 是 monorepo 根，需要选择成员包：可选成员 ${names.join(', ')}。\n下一步：当前环境无法交互——请直接使用成员路径，如 lpm link <成员路径>`)
@@ -664,6 +671,16 @@ async function refreshLastQuietly(rootDir: string): Promise<void> {
   }
 }
 
+/** S14 自愈注入：link 命令的执行路径（含「计划为空」的空跑）之后调用，保证宿主已有注入。
+ *  autoInitAfterLink 幂等自守：已注入 / 非 umi 宿主 / 无已注册 lib 均静默跳过（返回 reason 供判定）。
+ *  失败仅 stderr 警告，不阻断 link 主流程——注入是附加动作。 */
+async function ensureAutoInitAfterLink(rootDir: string): Promise<void> {
+  const auto = await autoInitAfterLink(rootDir)
+  if (auto.injected === false && typeof auto.reason === 'string' && auto.reason.startsWith('error:')) {
+    process.stderr.write(`警告：自动注入 utoopack 适配失败（链接操作本身不受影响）：${auto.reason.slice(6)}\n下一步：手动运行 lpm init（在含 umi 配置的目录）\n`)
+  }
+}
+
 /** 执行（写序 = S6 裁决：state → package.json → install → last → watch → 提示 → 留痕） */
 async function executeLinkPlan(plan: LinkPlan, opts: LinkOptions): Promise<number> {
   const { rootDir, pm, st, targets, aggregated, linkedTargets, pendingLinks, peerWarn, totalChanged, skippedTotal, traceChanges, traceInstalls } = plan
@@ -706,6 +723,10 @@ async function executeLinkPlan(plan: LinkPlan, opts: LinkOptions): Promise<numbe
   if ((plan.forceLastWrite || targets.length >= 2) && linkedTargets.length >= 1) {
     await refreshLastQuietly(rootDir)
   }
+
+  // S14 自动联动：链接写入完成后自愈注入（无条件调用，助手幂等自守——已注入/无 umi 宿主/无 lib 均静默跳过）。
+  // 放在 watch 之前——watch 前台驻留会阻塞，注入必须在它之前完成。失败不阻断主流程。
+  await ensureAutoInitAfterLink(rootDir)
 
   // H watch（Ruling 2：lib 自身 PM；前台驻留；Ctrl+C 兜底 kill；H7 spawn 失败警告）
   if (opts.watch === true && linkedTargets.length > 0) {
@@ -956,6 +977,8 @@ async function runPlanAndExecute(
     if (collectionLevel === true) {
       await refreshLastQuietly(ctx.rootDir)
     }
+    // S14 自愈：空跑但链接仍开着——宿主缺注入则补注入（幂等）
+    await ensureAutoInitAfterLink(ctx.rootDir)
     return 0
   }
   if (ctx.opts.dryRun === true) {
@@ -1057,9 +1080,13 @@ export async function runLink(targets: readonly string[], opts: LinkOptions, cwd
     if (plan.aggregated.size === 0) {
       if (opts.dryRun === true) {
         process.stdout.write('无待执行变更\n') // spec §4.4 K3：计划体为空 + 「无待执行变更」
-      } else if (hasSwitch) {
-        // S10 表 #2（spec §4.6 实现落点 2）：集合级操作即使全跳过，也把 last 对齐到当前 links 全集
-        await refreshLastQuietly(rootDir)
+      } else {
+        if (hasSwitch) {
+          // S10 表 #2（spec §4.6 实现落点 2）：集合级操作即使全跳过，也把 last 对齐到当前 links 全集
+          await refreshLastQuietly(rootDir)
+        }
+        // S14 自愈：全部命中「已链接、跳过」的空跑——链接仍开着，宿主缺注入则补注入（幂等）
+        await ensureAutoInitAfterLink(rootDir)
       }
       return 0
     }

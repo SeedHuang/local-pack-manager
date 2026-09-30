@@ -200,6 +200,13 @@ lpm init              # 确认后写入
 lpm uninit            # 摘掉
 ```
 
+**一般不用手动跑** —— 这两条命令已经和 link/unlink 联动上了：
+
+- **`lpm link` 成功后**：自动检测项目里有没有 umi 项目（`config/config.ts` / `.umirc.ts` 等），有且还没注入过 → 自动帮你 `init`（非交互）。
+- **`lpm unlink` 全部断开后**：自动检测已注入的 umi 配置 → 自动帮你 `uninit` 还原。
+
+非 umi 项目、或没有已注册 lib 时自动跳过，不打扰你。手动 `init` / `uninit` 仍然可用（带 diff 预览确认），需要精细控制时再用。
+
 ---
 
 ## 几个概念，用大白话讲

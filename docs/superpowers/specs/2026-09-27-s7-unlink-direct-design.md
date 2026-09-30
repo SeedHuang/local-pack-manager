@@ -151,7 +151,7 @@ export function buildForceInstallCommandLine(pm: PackageManagerId): string
 #### B. target 解析与 key 推导
 
 1. **名字分支**：key = target；不读 lib 目录（**unlink 不跑 checkLib**——lib 可能已删/移动，这正是 unlink 用途之一）
-2. **路径分支**：目录必须存在（否则 LinkArgumentError「路径不存在」）——镜像 S6 解析链 resolveTarget（已注册 → 注册 key）→ resolveMonorepo（B4 让选镜像，非 TTY 报错）→ key = manifest name ≠ '' ? name : toRel(rootDir, libDirAbs)（§9 自决 7 镜像）
+2. **路径分支**：目录必须存在（否则 LinkArgumentError「路径不存在」）——镜像 S6 解析链 resolveTarget（已注册 → 注册 key）→ resolveMonorepo（B4 让选镜像：成员唯一直接选；多成员非 TTY 报错，S6 §4.4 B3）→ key = manifest name ≠ '' ? name : toRel(rootDir, libDirAbs)（§9 自决 7 镜像）
 3. state.links 无 key → `未链接：${key}，跳过`（幂等对称——link 对已链接跳过，unlink 对未链接跳过；planSkipped 镜像）
 4. 同 key 去重（seenKey/seenRaw + dedupSkipped 计数）镜像 S6 E5
 

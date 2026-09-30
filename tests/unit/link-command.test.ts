@@ -571,6 +571,30 @@ describe('S6 留观补测（N-7/M-4）', () => {
   })
 })
 
+describe('S14 自愈：链接开着但宿主缺注入 → 空跑 link 补注入', () => {
+  it('手动 uninit 后重跑 lpm link --all（已链接空跑）→ 自动补注入', async () => {
+    const ws = makeWs({ 'apps/web/.umirc.ts': "export default defineConfig({\n  utoopack: {},\n})\n" })
+    const lib = makeLib()
+    writeFileSync(
+      join(ws, 'lpm.config.json'),
+      JSON.stringify({ version: 1, packageManager: 'pnpm', libs: { '@t/lib': relPathOf(ws, lib) } }),
+      'utf8',
+    )
+    const hostPath = join(ws, 'apps/web/.umirc.ts')
+    // ① 首次 link → executeLinkPlan 内自动注入
+    expect(await runLink(['@t/lib'], {}, ws)).toBe(0)
+    expect(readFileSync(hostPath, 'utf8')).toContain('/* lpm-inject')
+    expect(readFileSync(hostPath, 'utf8')).toContain('root:')
+    // ② 模拟用户手动 lpm uninit（摘掉标记段，宿主键还原）
+    writeFileSync(hostPath, "export default defineConfig({\n  utoopack: {},\n})\n", 'utf8')
+    expect(readFileSync(hostPath, 'utf8')).not.toContain('lpm-inject')
+    // ③ 重跑 lpm link --all：全部已链接 → 空计划（aggregated.size===0）→ 自愈补注入
+    expect(await runLink([], { all: true }, ws)).toBe(0)
+    expect(readFileSync(hostPath, 'utf8')).toContain('/* lpm-inject')
+    expect(readFileSync(hostPath, 'utf8')).toContain("root: '")
+  })
+})
+
 describe('S8 运行留痕（link）', () => {
   it('STR-L1：link 成功 → .lpm/last-run.json 存在且 command=link/result=ok', async () => {
     const ws = makeWs()

@@ -219,7 +219,7 @@ export async function runLink(targets: readonly string[], opts: LinkOptions, cwd
 
 1. **形态 A**（PRD 附录 A 行 471 字面）：libDir 无 package.json 且本地有 `pnpm-workspace.yaml` → `listWorkspaceMembers(libDir)` 展开成员
 2. **形态 B**：libDir 有 package.json 且 `loadWorkspace(libDir).manifestFormat !== 'single'` → `loadWorkspace(libDir).members`
-3. **让选**：TTY → `@clack/prompts` select 列全部成员（含根自身，根标记「（根）」），选定成员的 dir 作为 libDirAbs 继续（其 name/manifestPath 随之切换）；用户取消（clack isCancel）→ stderr「已取消」exit 1；非 TTY → 报错：列出成员名清单 + 建议「直接使用成员路径注册，如 lpm link <成员路径>」，exit 1
+3. **让选**：**成员唯一（如 pnpm-workspace.yaml 仅有 allowBuilds、无 packages 子包的单包库）→ 直接选该成员，不交互**；多成员 → TTY `@clack/prompts` select 列全部成员（含根自身，根标记「（根）」），选定成员的 dir 作为 libDirAbs 继续（其 name/manifestPath 随之切换）；用户取消（clack isCancel）→ stderr「已取消」exit 1；多成员且非 TTY → 报错：列出成员名清单 + 建议「直接使用成员路径注册，如 lpm link <成员路径>」，exit 1
 4. 形态 A 中 libDir 无 pnpm-workspace.yaml → 不入 B4 分支，交 checkLib 报 `manifest-missing`（「不是 npm 包」）
 5. dry-run 下 B4 让选照常发生（只读操作）
 
@@ -381,7 +381,7 @@ argv → cli.ts（link 特判）→ runLink(targets, opts, cwd)
 | 10 | LibCheckError: node-modules-empty | 步骤 6 | 「<lib> 的 node_modules 为空。先在 <lib路径> 执行包管理器 install」 | 1 |
 | 11 | LibCheckError: watch-script-missing | 步骤 7 | 「<lib> 缺 build:watch script。请在 lib package.json 补充后重试，或去掉 --watch」 | 1 |
 | 12 | LinkArgumentError | 未注册名 / 非路径形态 / libs 值非串 / 路径分支目录不存在（含未注册 scoped 名误路由，A3） | 「未知注册名/路径不存在：<t>。已注册：<清单>；若为路径请使用路径写法（绝对/相对，含空格加引号）；若为注册名请检查拼写或先注册」 | 1 |
-| 13 | LinkInteractionError: member-select | B4 让选非 TTY | 「<dir> 是 monorepo 根，需要选择成员包：可选成员 <清单>。当前环境无法交互——请直接使用成员路径，如 lpm link <成员路径>」 | 1 |
+| 13 | LinkInteractionError: member-select | B4 让选非 TTY（多成员） | 「<dir> 是 monorepo 根，需要选择成员包：可选成员 <清单>。当前环境无法交互——请直接使用成员路径，如 lpm link <成员路径>」 | 1 |
 | 14 | LinkInteractionError: non-lpm-ternary | 非 lpm 三选一非 TTY | 「检测到非 lpm 管理的本地链接（<file>），需交互确认原始 range。请手动恢复该文件原值后重试，或先 lpm link --dry-run 查看」 | 1 |
 | 15 | ProtocolPathError | mapProtocol 跨盘符 | S5 文案透传（「无法生成相对路径（跨盘符？）」） | 1 |
 | 16 | InstallError | runInstall 失败（exit ≠ 0 / spawn 失败） | 「install 失败（exit <code>）：<stderrTail>。state 已保留，重跑 lpm link 会幂等跳过（E1）——重试：修复报错后在 workspace 根重跑一次 <install 命令行>；若需彻底重来：① git checkout -- <受影响>/package.json ② 删除 .lpm/ ③ 在 workspace 根重跑一次 install——lpm 状态可抛弃重建」 | 1 |

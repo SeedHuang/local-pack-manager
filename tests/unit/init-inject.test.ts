@@ -4,7 +4,11 @@ import {
   InitIncompleteMarkerError,
   InitNotInjectedError,
   buildFragment,
+  findAllMarkers,
+  injectAdaptation,
   injectFragment,
+  injectIntoKey,
+  locateTopLevelKeyObject,
   removeFragment,
 } from '../../src/core/utoopack.js'
 
@@ -31,7 +35,7 @@ describe('buildFragment（spec §3.1）', () => {
 })
 
 describe('injectFragment（spec §8 自决 1 三态）', () => {
-  it('空对象体 {} → 无前置逗号', () => {
+  it('空对象体 {} → 无前置逗号（追加模式普通键格式，S14 方案 A）', () => {
     const out = injectFragment('export default defineConfig({})\n', FRAG())
     expect(out).toBe('export default defineConfig({\n  /* lpm-inject:start */\n  utoopack: {\n    root: \'../..\',\n  },\n  alias: {\n    react: \'D:/h/node_modules/react\',\n    antd: \'D:/h/node_modules/antd\',\n  },\n  /* lpm-inject:end */})\n')
   })
@@ -88,5 +92,53 @@ describe('removeFragment（spec §8 自决 1 摘除）', () => {
     const injected = injectFragment(orig, FRAG())
     expect(injected).toContain('\r\n')
     expect(removeFragment(injected)).toBe(orig)
+  })
+})
+
+describe('S14 方案 A：合并进宿主键（规避 TS1117/TS2783）', () => {
+  const HOST = 'export default defineConfig({\n  utoopack: {},\n  antd: {}\n})\n'
+
+  it('locateTopLevelKeyObject：命中顶层同名键对象体', () => {
+    const r = locateTopLevelKeyObject(HOST, 'utoopack')
+    expect(r).not.toBeNull()
+    expect(HOST.slice((r as { start: number; end: number }).start, (r as { start: number; end: number }).end + 1)).toBe('{}')
+  })
+  it('locateTopLevelKeyObject：无同名键 → null', () => {
+    expect(locateTopLevelKeyObject(HOST, 'alias')).toBeNull()
+  })
+  it('injectIntoKey：root 合并进宿主 utoopack 键内部，不产生第二个同名键', () => {
+    const out = injectIntoKey(HOST, 'utoopack', ["root: '../..',"])
+    // 同一对象体里 utoopack 键只出现一次
+    const utoCount = (out.match(/utoopack/g) ?? []).length
+    expect(utoCount).toBe(1)
+    expect(out).toContain("root: '../..'")
+    expect(out).toContain('/* lpm-inject:start */')
+    expect(out).toContain('/* lpm-inject:end */')
+  })
+  it('injectAdaptation：宿主有 utoopack 键 → 合并（单 utoopack）；alias 无 → 追加', () => {
+    const out = injectAdaptation(HOST, '../..', { react: 'D:/h/node_modules/react' })
+    expect((out.match(/utoopack/g) ?? []).length).toBe(1)
+    expect((out.match(/alias/g) ?? []).length).toBe(1)
+    expect(out).toContain("root: '../..'")
+  })
+  it('injectAdaptation：宿主无同名键 → 追加新键（与 S13 行为一致）', () => {
+    const bare = 'export default defineConfig({\n  antd: {}\n})\n'
+    const out = injectAdaptation(bare, '../..', { react: 'D:/h/node_modules/react' })
+    expect((out.match(/utoopack/g) ?? []).length).toBe(1)
+    expect((out.match(/alias/g) ?? []).length).toBe(1)
+  })
+  it('removeFragment：合并+追加双标记段一次摘除，宿主键保留原内容', () => {
+    const out = injectAdaptation(HOST, '../..', { react: 'D:/h/node_modules/react' })
+    expect(findAllMarkers(out).length).toBe(2) // utoopack 合并段 + alias 追加段
+    const restored = removeFragment(out)
+    expect(restored).not.toContain('lpm-inject')
+    expect(restored).not.toContain("root: '../..'")
+    expect(restored).toContain('utoopack: {}') // 宿主原键原样保留
+    expect(restored).toContain('antd: {}')
+  })
+  it('inject(uninit) 往返：合并模式 byte 恒等（宿主无尾逗号 + 单键合并）', () => {
+    const src = 'export default defineConfig({\n  utoopack: {}\n})\n'
+    const out = injectAdaptation(src, '../..', {})
+    expect(removeFragment(out)).toBe(src)
   })
 })

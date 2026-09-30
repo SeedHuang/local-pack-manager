@@ -37,6 +37,7 @@ import { LinkArgumentError, LinkCancelledError, LinkInteractionError, promptPath
 import { renderPlan, type PlanEntry, type PlanView } from './plan-view.js'
 import { traceFailure } from './run-trace.js'
 import { reportError as reportKnownError } from './errors.js'
+import { autoUninitAfterUnlinkAll } from './init.js'
 
 // unlink 直通版编排（S7 spec §4.4）。行为权威 = spec；崩溃安全顺序（PRD §9 行 306）：
 // 先恢复文件 → install → 复验/--force → 才删 state（last 先写后删——评审 P1-1）。
@@ -463,6 +464,12 @@ async function executeUnlinkPlan(plan: UnlinkPlan): Promise<number> {
       action: 'delete-entry',
       detail: `删除整个档案文件（清空前条目：${beforeKeys.join('、')}；原值：${JSON.stringify(Object.fromEntries(beforeKeys.map((k) => [k, st?.links[k]?.original ?? {}])))}）`,
     })
+    // S14 自动联动：全部断开后自动摘除 utoopack 适配（若宿主是 umi 项目且已注入）。
+    // 只在这条"全部断开"分支触发——部分断开不摘除（可能还有 lib 在联调）。失败不阻断主流程。
+    const auto = await autoUninitAfterUnlinkAll(rootDir)
+    if (auto.removed === false && typeof auto.reason === 'string' && auto.reason.startsWith('error:')) {
+      process.stderr.write(`警告：unlink 后自动摘除 utoopack 适配失败（断开本身不受影响）：${auto.reason.slice(6)}\n下一步：手动运行 lpm uninit（在含 umi 配置的目录）\n`)
+    }
   } else if (pendingDelete.length > 0) {
     await writeState(rootDir, { version: 1, links: remaining })
     traceChanges.push({

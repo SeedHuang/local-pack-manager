@@ -32,7 +32,7 @@
 - **不做真实环境自动化验证**：root 扩界解析、antd 暗色恢复、watch 性能 → 归真实环境手测（PRD §12 行 374–375 同口径；§13 验收清单）。
 - **不扩展 `LastRunTrace.command` 联合类型**：init/uninit 不写运行留痕（非回归命令，无失败收敛语义；留痕仅 link/unlink/repair 三命令既有面）。
 - **不新建 lpm 状态文件**：注入状态自感知于宿主配置内的标记段（见 §3.1），无 `.lpm/` 新增面。
-- **不改既有命令**：link/unlink/status/repair/save/preset/forget/dir/use 及 S12 冻结签名零改动。
+- **不改既有命令**：status/repair/save/preset/forget/dir/use 及 S12 冻结签名零改动。**例外（S13 收官后扩展）**：link/unlink 增加「成功后自动 init / 全部断开后自动 uninit」联动（见 §9 追加记录 S14）——只增不改，既有 link/unlink 行为与签名不变。
 
 ---
 
@@ -45,12 +45,15 @@
 | 3 | root 覆盖集合 | **宿主目录 + 全部已注册 lib 绝对路径的最近公共祖先**（lib 含未链接）；跨盘符/无公共祖先 → 报错；无已注册 lib → 提示先 link 注册。**注：必须含宿主目录本身**——utoopack.root 是虚拟 FS 根，宿主文件须在 root 内，若只取 libs 的祖先可能把宿主排除在外（libs 常在宿主上级或旁支） |
 | 4 | 宿主定位 | **运行目录 + 候选文件名**：`config/config.ts` → `.umirc.ts` → `config/config.js` → `.umirc.js`；找不到 → 报错 |
 | 5 | v1 范围 | **静态注入** + 文档注明「lib 加新 peer 后重跑 lpm init」；`watch.ignored` 不注入，真实环境实测后再定（若加，uninit 一并摘除） |
-| 6 | 冲突合并 | 注入段置于对象体**末尾**（后定义覆盖宿主同名键）+ 提示「已有同名键被 lpm 片段覆盖」；uninit 摘除注入段后宿主原键**自动恢复生效**（遮蔽而非删除，无需备份文件） |
+| 6 | 冲突合并 | **宿主已有同名键 → 合并进该键对象体内部**（S14 方案 A 定版）；无同名键 → 对象体末尾追加新键；提示「已有 utoopack/alias 配置，已合并进宿主键；uninit 后可还原」。uninit 摘除注入段后宿主原键**原样保留**（含键内其他配置，无需备份文件）。**注：初版「重复键」「对象展开」两版均因 TS1117/TS2783 废弃——见裁决 6 修订** |
 
-**裁决 6 的机制说明（关键，请用户知悉）**：JS/TS 对象字面量重复键时**后者覆盖前者**（Object literal 语义）。因此：
-- 注入段**插到配置对象体末尾**（`}` 之前），其 `utoopack` / `alias` 键天然遮蔽用户手写的同名键；
-- 用户原键**从未被删除**，只是被遮蔽 → **uninit 摘除注入段后，用户原键自动恢复生效**，无需备份、无需状态文件；
-- init 时检测到宿主已有同名键 → 打印一行提示「已有 utoopack/alias 配置，lpm 片段将覆盖之；uninit 后可还原」。
+**裁决 6 的机制说明（S14 方案 A 定版，2026-09-30）**：注入不再产生「第二个同名键」，而是把 `root` / alias peer **合并进宿主同名键的对象体内部**（`/* lpm-inject:start */` … `/* lpm-inject:end */` 标记段包住注入行，插在宿主键 `{` 之后；键体比对象体深一层 → 4 空格缩进）。因此：
+- **键只出现一次**——TS1117（重复键）/ TS2783（展开覆盖）从根上消失，不依赖「后定义覆盖」语义；
+- 宿主键内的**原有内容原样保留**（如 `utoopack: { root: 'custom' }` 的 `root: 'custom'` 仍在），注入行以标记段包裹、uninit 摘除后宿主键逐字节还原；
+- 宿主**无**该键时仍走追加模式（对象体末尾 `buildFragment` 普通键），与 S13 行为一致；
+- init 时检测到宿主已有同名键 → 提示「检测到宿主已有 utoopack/alias 配置，已合并进宿主键；uninit 后可还原」。
+
+> **裁决 6 修订（S14 追加，2026-09-30）**：初版用「对象字面量重复键」（`utoopack: {...}` 写两遍）实现后定义覆盖——JS 运行时合法（后者覆盖前者），但宿主 umi 配置是 **TS 文件**（.umirc.ts / config.ts），`defineConfig({...})` 有类型检查，重复键直接报 **TS1117**（An object literal cannot have multiple properties with the same name）。曾改**对象展开** `...{...}`：字面量层面不重复，但宿主已声明同名键时，展开对象里的同名属性被 TS 判为「指定两次、将被覆盖」仍报 **TS2783**——两版都过不了 tsc。**定版 = 合并进宿主键对象体内部**（`injectIntoKey`）：无第二个同名键、无展开，TS 编译零报错（BFM `.umirc.ts` `tsc --noEmit` 实测通过）。
 
 ---
 
@@ -58,13 +61,15 @@
 
 ### 3.1 标记段形态（注入 / 摘除 / 自感知）
 
+**追加模式**（宿主**无** `utoopack`/`alias` 同名键时，S13 既有行为）：
+
 ```
 宿主 config/config.ts 注入后：
 
   export default defineConfig({
     antd: {},
     access: {},
-    ,/* lpm-inject:start */
+    /* lpm-inject:start */
     utoopack: {
       root: '../..',
     },
@@ -76,13 +81,33 @@
   })
 ```
 
-> 注：上图示意「宿主对象体无尾逗号」时注入的形态——注入补一个逗号作为分隔（`,\n  /* lpm-inject:start */`）。「有尾逗号」「空对象体」两态见 §8 自决 1（本图仅为可读示意，非逐字节规范）。
+**合并模式**（S14 方案 A 定版，宿主**已有**同名键时，如 BFM `.umirc.ts` 的 `utoopack: {}`）：
+
+```
+宿主 .umirc.ts 注入后：
+
+  export default defineConfig({
+    // ...宿主原有配置...
+    utoopack: {/* lpm-inject:start */
+      root: '../..',
+      /* lpm-inject:end */},
+    proxy: { ... },
+    /* lpm-inject:start */
+    alias: {
+      react: 'D:/Seed/BFM/apps/web/node_modules/react',
+      antd: 'D:/Seed/BFM/apps/web/node_modules/antd',
+    },
+    /* lpm-inject:end */
+  })
+```
+
+> 注：上图示意「宿主对象体无尾逗号」时注入的形态——追加模式补一个逗号作为分隔（`,\n  /* lpm-inject:start */`）。「有尾逗号」「空对象体」两态见 §8 自决 1（本图仅为可读示意，非逐字节规范）。合并模式下注入行以标记段包住、插在宿主键 `{` 之后（键体深一层 → 4 空格缩进），`}` 保持原位（空键体 `{}` 时与 `/* lpm-inject:end */` 紧贴），uninit 摘除后宿主键逐字节还原。
 
 要点：
-- **标记段 = 对象体末尾的一段**（`/* lpm-inject:start */` 到 `/* lpm-inject:end */`，含两组键与它们之间的换行缩进）。`/* lpm-inject:end */` 后不带尾逗号（对象体闭合 `}` 前）。
-- 注入时在标记段**前**补一个逗号（若对象体原末尾已有尾逗号则不补）；摘除时**连同前导逗号**一并删，保证还原后无残留逗号。
+- **标记段**：`/* lpm-inject:start */` 到 `/* lpm-inject:end */`。追加模式 = 对象体末尾一段（含新键）；合并模式 = 宿主同名键对象体内部一段（仅注入行）。一个文件**可能同时存在两个标记段**（如 utoopack 合并 + alias 追加），uninit 从后往前一次摘除全部。
+- 追加模式注入时在标记段**前**补一个逗号（若对象体原末尾已有尾逗号则不补）；摘除时**连同前导逗号**一并删，保证还原后无残留逗号。
 - **自感知**：uninit 只需在宿主配置源码中查找 `/* lpm-inject:start */` 标记；找到即已注入，未找到报「未注入」。
-- **遮蔽**：注入段位于对象体末尾（所有用户键之后）→ `utoopack`/`alias` 后定义覆盖用户同名键。
+- **不产生同名键**（方案 A）：宿主已有 `utoopack`/`alias` 键时合并进该键体内部，全文同名键只出现一次——无 TS1117/TS2783（裁决 6 修订）。
 
 ### 3.2 `lpm init` 数据流
 
@@ -96,7 +121,7 @@ lpm init [--dry-run]（在宿主 umi 子包目录运行）
   → ⑤ 计算 root：全部 lib 绝对路径 + 宿主目录的最近公共祖先，相对宿主 cwd 的相对路径（正斜杠）
        跨盘符/无公共祖先 → InitRootError
   → ⑥ 计算 alias：遍历 lib peerDependencies ∩ 宿主直接依赖 → 宿主实例绝对路径（§4.5）
-  → ⑦ 检测宿主已有 utoopack/alias 键 → 提示「将被覆盖，uninit 可还原」
+  → ⑦ 检测宿主已有 utoopack/alias 键 → 有则**合并进该键体内部**（无第二个同名键）并提示「已合并进宿主键，uninit 可还原」；无则追加新键
   → ⑧ 构造注入段源码（含 root + alias）→ 组装注入后全文（文本级：原内容 + 末尾插入）
   → ⑨ 交互闸门（§4.6）：
        --dry-run → 打印注入 diff 预览（+ 行）零写盘 return 0
@@ -308,9 +333,11 @@ function printInjectDiff(hostPath: string, beforeLines: string[], afterLines: st
 - **探测顺序（§8 自决 11）**：peer 在 cwd/node_modules → 取该路径；仅在 rootDir/node_modules → 取该路径；两者皆无 → 跳过 + 提示
 
 **`tests/unit/init-inject.test.ts`（新）——文本级注入/摘除（golden，仿 rewriter-samples）**
-- 注入：对象体末尾插入标记段——三态分别断言：**空对象体**（`{}` → 无前置逗号）、**无尾逗号**（补逗号）、**有尾逗号**（复用原逗号）
-- 遮蔽：宿主已有 `utoopack`/`alias` 键 → 注入后为「用户键 + 注入段」，注入段后定义；uninit 摘除 → 宿主键保留原样（**关键还原断言**）
+- 注入（追加模式）：对象体末尾插入标记段——三态分别断言：**空对象体**（`{}` → 无前置逗号）、**无尾逗号**（补逗号）、**有尾逗号**（复用原逗号）
+- 合并模式（S14 方案 A）：宿主已有 `utoopack`/`alias` 键 → `injectIntoKey` 把 root/alias peer 合并进键体内部（`locateTopLevelKeyObject` 命中），**全文同名键只出现一次**；uninit 摘除 → 宿主键**逐字节还原**（含空键体 `{}`，**关键还原断言**）
+- 追加模式遮蔽（legacy 路径）：宿主已有同名键但走追加 → uninit 摘除后宿主键保留原样
 - 摘除：标记段连同注入时补的逗号删除。**byte 往返恒等（inject(uninject(x)) === x）仅在「宿主无尾逗号」fixture 上断言**；「宿主有尾逗号」fixture 断言摘除后为语义等价（原尾逗号被消费，语法合法），**不**断言 byte 恒等——见 §8 自决 1
+- **多标记段一次摘除**：合并 + 追加并存（如 utoopack 合并 + alias 追加）→ `findAllMarkers` 找全、从后往前一次摘净
 - CRLF/LF 保持；缩进保持；尾随换行保持（复用 rewriter 格式保持约定）
 
 **`tests/unit/init-command.test.ts`（新）——runInit/runUninit 编排**
@@ -355,6 +382,7 @@ function printInjectDiff(hostPath: string, beforeLines: string[], afterLines: st
    - **非空且末尾无尾逗号**（最后一个非空白字符 ≠ `,`）：插入 `,\n  /* lpm-inject:start */\n  <keys>\n  /* lpm-inject:end */\n`（补一个逗号作分隔）。
    - **非空且末尾有尾逗号**（最后一个非空白字符 = `,`）：直接插入 `\n  /* lpm-inject:start */\n  <keys>\n  /* lpm-inject:end */\n`（复用既有尾逗号作分隔，不补逗号）。
    - 摘除时从 `/* lpm-inject:start */` 定位，删到 `/* lpm-inject:end */` 行尾；**随后把「前一个非空白字符若是 `,` 则删除」**——即注入时补的逗号被删掉；但**若那是宿主原有的尾逗号，删除会使宿主配置少一个尾逗号**（语义等价、语法合法、git diff 一行）。见 §6 golden 断言对该边界如何表述（**byte 往返恒等仅在「宿主无尾逗号」fixture 上断言**）。
+   - **合并模式（S14 方案 A，`injectIntoKey`）**：定位宿主同名键对象体（`locateTopLevelKeyObject`），在键体内插入标记段（键体比对象体深一层 → 每行 4 空格缩进）。**空键体**（`{}`）→ 无前置逗号、无前导 `\n`，start 标记与 `{` 紧贴、`}` 保持原位与 end 标记紧贴——保证 uninit 摘除后逐字节还原回 `{}`。**非空键体** → 同对象体三态逗号规则（补 `,` 分隔或复用尾逗号）。摘除逻辑同追加模式（前一个非空白字符是 `,` 则连逗号删；否则摘到前一非空白字符之后，吞掉标记行自身缩进——否则空键体合并段会残留 `{    }`，那 4 空格是 start 标记行的缩进、不属于宿主原内容）。
 2. **`locateConfigObject` 的起始定位**：优先匹配 `defineConfig(`，其次 `export default {`；两者皆无 → `I2`。括号配对跳过字符串（含转义）与 `//`、`/* */`、`/** */` 注释。返回最外层对象体 `{` 与 `}` 的下标；`{` 后紧跟 `}`（空体）也须正确返回。
 3. **root 值规范化**：`toRelSlashes` 输出 `target === cwd` 时用 `'.'`；不输出尾 `/`；Windows 盘符保留大写（不强制小写）。
 4. **宿主「直接依赖」读取面**：`dependencies` + `devDependencies` 两段键并入 hostDeps（umi 项目 antd 常见于 dependencies，devDeps 也计入稳妥）；`peerDependencies` 不计入宿主面。
@@ -392,7 +420,7 @@ function printInjectDiff(hostPath: string, beforeLines: string[], afterLines: st
 - 手法 3 表格一致性：§2 裁决 1–6 ↔ §4 接口 ↔ §5 错误表 ↔ §6 测试逐条对齐（裁决 3 root 含宿主目录 ↔ §4.5 公式含 cwd ↔ §6 root 示例）；§4.6 交互闸门三态 ↔ §2 裁决 2 ↔ S12 §4.5 一致。
 - 手法 1 幂等/中断：init 已注入 → I6；uninit 未注入 → I7；写盘全走 writeTextFileAtomic（原子写）→ 中断重跑收敛。
 - 手法 2 字段审计：S13 **零新增持久化字段**（无 .lpm 文件面、不扩 LastRunTrace.command）；注入状态自感知于宿主配置标记段——无字段生命周期残留风险。
-- 手法 6 可逆性：init（注入）与 uninit（摘除）互逆，均有 TTY 确认；遮蔽设计保证 uninit 后宿主原键自动恢复——无不可逆操作。
+- 手法 6 可逆性：init（注入）与 uninit（摘除）互逆，均有 TTY 确认；**合并进键设计**（S14 方案 A 定版：不产生第二个同名键，注入行以标记段包裹、插进宿主键体内）保证 uninit 后宿主原键自动恢复——无不可逆操作。
 - 角色面板：架构师（locateConfigObject 单一职责、reportError 结构零改动、无第二真相——§8 自决为唯一逐字节规范）；资深测试（golden fixture 覆盖 CRLF/LF、BOM、空体、尾逗号、单行紧凑、遮蔽、不完整标记；e2e 先 build 内建）；交付运维（回滚 = uninit / git，诊断 = 错误模板）。
 
 ### 实现期裁定（T6 收口，2026-09-29）
@@ -402,6 +430,7 @@ function printInjectDiff(hostPath: string, beforeLines: string[], afterLines: st
   1. **alias 键无引号**：`buildFragment` 输出 `  ${k}: '${v}',`（键不带引号），与 plan Task 4 草案 `  '${k}': '${v}',` 不同——alias 目标以简单标识符为常，省引号更贴近 umi 惯例；golden 断言 `react: 'D:/h/node_modules/react'` 锁定。
   2. **单层缩进**（§8 自决 1 形态）：`injectFragment` 插入形态为 `'\n' + indented`（indented 每行 2 空格）；plan 草案 `'\n  ' + indented` 会造成双层（4 空格）缩进，实现期收敛为单层 2 空格，与 §3.1 示意一致。
   3. **byte 恒等仅无尾逗号宿主**（§6/§8 自决 1）：`removeFragment` 的 byte 往返恒等断言只在「宿主无尾逗号」fixture 上做；「宿主有尾逗号」fixture 断言语义等价（原尾逗号被消费）。
+  4. **方案 A 合并进键体（S14 定版，2026-09-30）**：`injectIntoKey` 键体内容每行 4 空格缩进（比对象体 2 空格深一层）；**空键体 `{}`** 注入时无前导 `\n`、start 标记与 `{` 紧贴（`}` 保持原位），保证摘除逐字节还原回 `{}`；`removeFragment` 摘除时若无前导逗号则摘到**前一非空白字符之后**（吞掉标记行自身缩进），避免残留 `{    }`。
 
 ### OCR 修复波裁定（用户提交 `8619bd1` 后执行，2026-09-29）
 
@@ -410,5 +439,27 @@ function printInjectDiff(hostPath: string, beforeLines: string[], afterLines: st
 - **驳回（2）**：L3 `clack.isCancel(ok)` 冗余——与既有 repair/link 交互惯例一致（S9 spec §8.2 先例），保持；L9 BOM 写回——§8 自决 12 有意设计（与 S5 口径一致）。
 - **候选（1）**：L7 runInit/runUninit 编排重复抽 helper——触发信号 = 第三个对称命令出现。
 - **修复波后终态**：`pnpm verify` exit 0 = typecheck 0 + build + unit **34 文件 / 579 例**（573 + 6 新用例）+ e2e **1 文件 / 42 例**。改动（5 个 `M`）留待用户 commit。
+
+### S14 追加记录：link/unlink 自动联动（2026-09-30，用户提需）
+
+**背景**：S13 的 init/uninit 是独立手动命令——「脚本得有人想起来跑它」的毛病复发（link 后忘 init → dev 报 Module not found；unlink 后忘 uninit → 配置残留）。用户提需：link 后自动 init、unlink 全部断开后自动 uninit。
+
+**设计（只增不改，S13 全部冻结签名/原语零改动）**：
+
+1. **新增 workspace 级宿主定位** `findHostConfigInWorkspace(ws)`（utoopack.ts）：遍历 workspace 成员（含根），候选文件名按序，返回 `{ dir, hostPath }`——link/unlink 在 workspace 根运行，umi 配置可能在成员子包（如 `web/.umirc.ts`），须按成员目录找而非 cwd。
+2. **新增自动联动函数**（init.ts）：
+   - `locateHostConfigInWs(rootDir)`：loadWorkspace + findHostConfigInWorkspace
+   - `autoInitAfterLink(rootDir)`：复用 S13 原语（buildRootValue/buildAliasMap + S14 一站式 `injectAdaptation`——按宿主有无同名键自动「合并进键」或「追加新键」），跳过交互闸门直接写入；幂等（已注入 → already-injected）；非 umi 宿主 → no-umi-host；无 lib → no-libs；失败吞错返回 reason（不阻断 link 主流程）
+   - `autoUninitAfterUnlinkAll(rootDir)`：复用 removeFragment；未注入 → not-injected；**不完整标记绝不自动摘除（I8 铁律）**→ stderr 警告交用户手工；失败吞错
+3. **触发点**（成功路径，dry-run 天然不触发）：
+   - link：**所有执行路径**之后都自愈补注入——`executeLinkPlan`（install 之后、watch 之前，watch 前台驻留会阻塞注入）＋ **直通/交互两处「计划为空」出口**（全部命中「已链接、跳过」的空跑）。抽 `ensureAutoInitAfterLink` 助手（link.ts）：无条件调用 `autoInitAfterLink`，其幂等自守（已注入/非 umi 宿主/无已注册 lib 均静默跳过）。**自愈语义**：手动 `lpm uninit` 摘掉注入后链接仍开着时，重跑 `lpm link`（哪怕空跑）即补回注入——`lpm init` 只看已注册 lib、不看链接状态，联动判断随之对齐
+   - unlink：`executeUnlinkPlan` 的「全部断开（state 清空）」分支——部分断开不摘除（可能还有 lib 在联调）
+4. **失败语义**：联动失败只 stderr 警告 + 提示手动 `lpm init`/`lpm uninit`，不影响 link/unlink 退出码（联动是附加动作，主流程已完成）。
+
+**测试**：`tests/unit/init-auto.test.ts`（新，11 例）——宿主定位（子包命中/无宿主）、自动注入（成功/幂等/合并提示/非 umi/无 lib）、自动摘除（成功/未注入/不完整标记 I8/非 umi）；`tests/unit/init-inject.test.ts` 增 6 例方案 A 合并模式（合计 20 例）；`tests/unit/link-command.test.ts` 增 1 例 S14 自愈回归（空跑 link --all 补注入）。**终态实测（取数命令 `npx vitest run tests/unit`）**：unit **35 文件 / 599 例**；`npx vitest run tests/e2e` = **1 文件 / 42 例**；合计 36 文件 / 641 例，exit 0。
+
+**真实环境验证（BFM + ai_suit_tool，2026-09-30）**：`lpm unlink`（唯一库）→ 自动摘除 `.umirc.ts` 的 lpm-inject 段、用户原 `utoopack: {}` 保留；`lpm link --watch` → 自动注入成功、tokens.css 被本地库正确解析；`pnpm dev` 全量编译通过，health 200。**方案 A 复验（同日）**：宿主 `utoopack: {}` 时 re-init 走合并进键（`root` 并入键体、alias 追加，全文单 utoopack 键），`web` 目录 `npx tsc --noEmit` 零错误（无 TS1117/TS2783）；`lpm uninit --dry-run` 预览摘除后宿主键逐字节还原 `{}`。
+
+**待验项顺延**（S13 §7 不变）：watch 性能、dedupe 动态化。
 
 

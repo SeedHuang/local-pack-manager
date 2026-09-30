@@ -241,7 +241,16 @@ function printReport(pm: PackageManagerId, scan: ScanOutcome): void {
     if (e.issues.length > 0 || e.notes.length === 0) continue
     process.stdout.write(`注（${e.key}）：${e.notes.join('；')}\n`)
   }
-  if (scan.ok > 0) process.stdout.write(`其余 ${scan.ok} 个已注册库当前使用正式版本，正常\n`)
+  // 其余 = 无异常且无备注的静默正常条目；按实际状态分类（本地链接生效 vs 正式版本），避免把已链接库误述成「正式版本」
+  const silentOk = scan.entries.filter((e) => e.issues.length === 0 && e.notes.length === 0)
+  if (silentOk.length > 0) {
+    const linked = silentOk.filter((e) => e.files.some((f) => isLocalish(f.declared))).length
+    const formal = silentOk.length - linked
+    const parts: string[] = []
+    if (linked > 0) parts.push(`${linked} 个本地链接生效`)
+    if (formal > 0) parts.push(`${formal} 个使用正式版本`)
+    process.stdout.write(`其余 ${silentOk.length} 个库状态正常${parts.length > 0 ? `（${parts.join('，')}）` : ''}\n`)
+  }
 }
 
 /** 建议文案（--json 用）：无异常 → null；漂移且声明==档案原值 → 中性建议；否则直接 repair。
