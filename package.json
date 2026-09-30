@@ -13,8 +13,9 @@
     "dev": "tsup --watch",
     "typecheck": "tsc --noEmit",
     "test": "vitest run tests/unit",
+    "test:coverage": "vitest run tests/unit --coverage",
     "test:e2e": "vitest run tests/e2e",
-    "verify": "pnpm typecheck && pnpm build && pnpm test && pnpm test:e2e",
+    "verify": "pnpm typecheck && pnpm build && pnpm test:coverage && pnpm test:e2e",
     "localG": "pnpm build && npm install -g .",
     "localG:rm": "npm uninstall -g lpm"
   },
@@ -25,6 +26,7 @@
   },
   "devDependencies": {
     "@types/node": "^26.6.2",
+    "@vitest/coverage-v8": "^5.0.2",
     "tsup": "^8.5.1",
     "typescript": "^7.0.2",
     "vitest": "^5.0.1"
